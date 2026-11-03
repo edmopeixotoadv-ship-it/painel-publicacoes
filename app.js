@@ -1,6 +1,7 @@
-// Painel de publicações e agenda.
+// Painel de publicações, agenda e atendimentos.
 // Página pública, dados protegidos: só e-mails em usuarios_autorizados conseguem ler (regras no banco).
 // A agenda grava pela função "agenda", que também atualiza o Google Agenda de cada responsável.
+// A aba Atendimento fica em atendimento.js (fichas em fichas.js).
 
 const SUPABASE_URL = "https://bmfpgicxosfshvbzntqo.supabase.co";
 const SUPABASE_CHAVE_PUBLICA = "sb_publishable_F17uRoLf_Z8gR-xD0Nt7-g_qgW64XJn";
@@ -8,7 +9,7 @@ const POR_PAGINA = 50;
 const FUSO = "America/Sao_Paulo";
 const TIPOS = {
   prazo: "Prazo", audiencia: "Audiência", reuniao: "Reunião",
-  atendimento: "Atendimento", sustentacao_oral: "Sustentação oral", outro: "Outro",
+  atendimento: "Atendimento", sustentacao_oral: "Sustentação oral", distribuicao: "Distribuição", outro: "Outro",
 };
 const DIAS_SEMANA = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
 
@@ -78,7 +79,7 @@ function nomePessoa(email) {
 // ------------------------------------------------------------- login e carga
 
 function mostrar(tela) {
-  for (const t of ["tela-login", "tela-negado", "tela-publicacoes", "tela-agenda"]) $(t).hidden = t !== tela;
+  for (const t of ["tela-login", "tela-negado", "tela-publicacoes", "tela-agenda", "tela-atendimento"]) $(t).hidden = t !== tela;
 }
 
 async function iniciar() {
@@ -96,8 +97,8 @@ async function iniciar() {
   estado.equipe = equipe;
   $("abas").hidden = false;
   preencherFiltrosAgenda();
-  mostrar(location.hash.startsWith("#agenda") ? "tela-agenda" : "tela-publicacoes");
-  await Promise.all([carregarPublicacoes(), carregarAgenda()]);
+  mostrar(`tela-${abaAtual()}`);
+  await Promise.all([carregarPublicacoes(), carregarAgenda(), carregarAtendimentos()]);
   rotear();
 }
 
@@ -133,18 +134,26 @@ async function carregarAgenda() {
   renderizarPublicacoes();
 }
 
+function abaAtual() {
+  const aba = location.hash.replace(/^#/, "").split("/")[0];
+  return ["agenda", "atendimento"].includes(aba) ? aba : "publicacoes";
+}
+
 function rotear() {
-  const [aba, id] = location.hash.replace(/^#/, "").split("/");
-  const agenda = aba === "agenda";
-  if (estado.eu && estado.equipe.length) mostrar(agenda ? "tela-agenda" : "tela-publicacoes");
+  const [, id, extra] = location.hash.replace(/^#/, "").split("/");
+  const aba = abaAtual();
+  // quem sai de uma ficha com alterações não perde nada: grava antes de trocar de tela
+  if (fichaAlterada() && !(aba === "atendimento" && id === at.ficha.atendimento.id)) salvarFicha();
+  if (estado.eu && estado.equipe.length) mostrar(`tela-${aba}`);
   document.querySelectorAll(".abas a").forEach((a) => {
-    if (a.dataset.aba === (agenda ? "agenda" : "publicacoes")) a.setAttribute("aria-current", "page");
+    if (a.dataset.aba === aba) a.setAttribute("aria-current", "page");
     else a.removeAttribute("aria-current");
   });
-  if (agenda && id) {
+  if (aba === "agenda" && id) {
     const c = estado.compromissos.find((x) => x.id === id);
     if (c) abrirFormulario(c);
   }
+  if (aba === "atendimento") rotearAtendimento(id, extra);
 }
 
 // ------------------------------------------------------------- publicações
@@ -444,10 +453,15 @@ function abrirFormulario(c) {
   $("c-descricao").value = c?.descricao || "";
   $("c-vinculo").dataset.chave = c?.publicacao_chave || "";
   const pub = c?.publicacao_chave && estado.publicacoes.find((p) => p.chave === c.publicacao_chave);
-  $("c-vinculo").hidden = !pub;
+  const atend = c?.id && at.lista.find((a) => a.compromisso_id === c.id);
+  $("c-vinculo").hidden = !pub && !atend;
   if (pub) {
     $("c-vinculo").innerHTML = `Vinculado à publicação de ${dataBR(pub.data)} · ${esc(pub.tribunal)} · ${esc(pub.processo || "")} ` +
       `<a href="#publicacoes" data-ver-pub="${esc(pub.chave)}">ver publicação</a>`;
+  } else if (atend) {
+    $("c-vinculo").innerHTML = `Vinculado ao atendimento de ${dataBR(atend.data_atendimento)} · ${esc(tituloAtendimento(atend))} ` +
+      `<a href="#atendimento/${esc(atend.id)}">abrir ficha</a>` +
+      (atend.situacao === "aguardando_distribuicao" ? " · registre a distribuição pela ficha, com o número do processo" : "");
   }
   $("k-disp").value = pub?.data || "";
   $("k-resultado").hidden = true;
@@ -613,5 +627,6 @@ $("c-vinculo").addEventListener("click", (e) => {
 });
 
 window.addEventListener("hashchange", rotear);
+prepararAtendimento();
 sb.auth.onAuthStateChange((evento) => { if (evento === "SIGNED_IN" && !estado.eu) iniciar(); });
 iniciar();
