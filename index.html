@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Publicações · BLPR</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231f3a5f'/%3E%3Cpath d='M9 8h11l4 4v12H9z' fill='none' stroke='%23fff' stroke-width='2'/%3E%3Cpath d='M12 15h9M12 19h7' stroke='%23fff' stroke-width='2'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="estilo.css">
+</head>
+<body>
+<header>
+  <div class="topo">
+    <h1>Publicações · BLPR</h1>
+    <nav class="abas" id="abas" hidden>
+      <a href="#publicacoes" data-aba="publicacoes">Publicações</a>
+      <a href="#agenda" data-aba="agenda">Agenda</a>
+    </nav>
+    <span class="usuario" id="usuario"></span>
+    <button id="sair" hidden>Sair</button>
+  </div>
+</header>
+
+<main>
+  <section class="login" id="tela-login" hidden>
+    <h2>Entrar</h2>
+    <p>Digite seu e-mail. Você receberá um link de acesso, sem senha.</p>
+    <form id="form-login">
+      <label for="email">E-mail</label>
+      <input id="email" type="email" autocomplete="email" required placeholder="voce@exemplo.com">
+      <button class="botao" type="submit">Enviar link de acesso</button>
+    </form>
+    <div class="aviso" id="aviso-login" hidden></div>
+  </section>
+
+  <section class="login" id="tela-negado" hidden>
+    <h2>Acesso não autorizado</h2>
+    <p>O e-mail <strong id="email-negado"></strong> não está na lista da equipe. Peça ao administrador para incluí-lo.</p>
+    <button class="botao" id="sair-negado">Sair</button>
+  </section>
+
+  <section id="tela-publicacoes" hidden>
+    <div class="resumo" role="group" aria-label="Filtro rápido por situação">
+      <button class="cartao-num" data-situacao="nao-lidas"><div class="n" id="n-nao-lidas">–</div><div class="r">Não lidas</div></button>
+      <button class="cartao-num" data-situacao="pendentes"><div class="n" id="n-pendentes">–</div><div class="r">Aguardando providência</div></button>
+      <button class="cartao-num" data-situacao="providenciadas"><div class="n" id="n-providenciadas">–</div><div class="r">Providenciadas</div></button>
+      <button class="cartao-num" data-situacao="todas" aria-pressed="true"><div class="n" id="n-todas">–</div><div class="r">Todas</div></button>
+    </div>
+    <div class="filtros">
+      <input class="busca" id="f-texto" type="search" placeholder="Buscar por processo, parte, órgão ou texto…" aria-label="Buscar">
+      <select id="f-tribunal" aria-label="Tribunal"><option value="">Todos os tribunais</option></select>
+      <input id="f-de" type="date" aria-label="Disponibilizada a partir de">
+      <input id="f-ate" type="date" aria-label="Disponibilizada até">
+      <button id="f-limpar">Limpar</button>
+    </div>
+    <div class="contagem" id="contagem"></div>
+    <div class="lista" id="lista"></div>
+    <button class="botao mais" id="mais" hidden>Mostrar mais</button>
+  </section>
+
+  <section id="tela-agenda" hidden>
+    <div class="barra-agenda">
+      <div class="grupo" role="group" aria-label="Visualização">
+        <button data-visao="lista" aria-pressed="true">Lista</button>
+        <button data-visao="semana">Semana</button>
+        <button data-visao="mes">Mês</button>
+      </div>
+      <div class="grupo" role="group" aria-label="Navegar">
+        <button id="ag-anterior" aria-label="Período anterior">‹</button>
+        <button id="ag-hoje">Hoje</button>
+        <button id="ag-proximo" aria-label="Próximo período">›</button>
+      </div>
+      <strong class="periodo" id="ag-periodo"></strong>
+      <button class="botao" id="ag-novo">+ Novo compromisso</button>
+    </div>
+    <div class="filtros filtros-agenda">
+      <label class="check"><input type="checkbox" id="ag-meus"> Só os meus</label>
+      <select id="ag-tipo" aria-label="Tipo"><option value="">Todos os tipos</option></select>
+      <select id="ag-situacao" aria-label="Situação">
+        <option value="pendente">Pendentes</option>
+        <option value="cumprido">Cumpridos</option>
+        <option value="cancelado">Cancelados</option>
+        <option value="">Todas as situações</option>
+      </select>
+      <select id="ag-responsavel" aria-label="Responsável"><option value="">Todos os responsáveis</option></select>
+    </div>
+    <div id="ag-atrasados"></div>
+    <div id="ag-conteudo"></div>
+  </section>
+</main>
+
+<dialog id="dlg">
+  <form id="form-comp" method="dialog">
+    <div class="dlg-cab">
+      <h2 id="dlg-titulo">Novo compromisso</h2>
+      <button type="button" class="fechar" id="dlg-fechar" aria-label="Fechar">×</button>
+    </div>
+    <div class="dlg-corpo">
+      <div class="linha2">
+        <label>Tipo<select id="c-tipo" required></select></label>
+        <label>Situação<select id="c-situacao">
+          <option value="pendente">Pendente</option><option value="cumprido">Cumprido</option><option value="cancelado">Cancelado</option>
+        </select></label>
+      </div>
+      <label>Título<input id="c-titulo" required maxlength="200" placeholder="Ex.: Contestação — Banco X"></label>
+
+      <fieldset class="calc" id="calc" hidden>
+        <legend>Calcular prazo (sugestão)</legend>
+        <div class="linha3">
+          <label>Disponibilizada em<input type="date" id="k-disp"></label>
+          <label>Prazo<input type="number" id="k-dias" min="1" max="365" value="15"></label>
+          <label>Contagem<select id="k-modo"><option value="uteis">dias úteis</option><option value="corridos">dias corridos</option></select></label>
+        </div>
+        <label class="check"><input type="checkbox" id="k-forense" checked> Considerar feriados forenses (Carnaval, Semana Santa, 11/08, 01/11, 08/12)</label>
+        <button type="button" class="botao-sec" id="k-calcular">Calcular data final</button>
+        <div class="calc-res" id="k-resultado" hidden></div>
+      </fieldset>
+
+      <div class="linha3">
+        <label>Data<input type="date" id="c-data" required></label>
+        <label>Início<input type="time" id="c-hora-ini"></label>
+        <label>Fim<input type="time" id="c-hora-fim"></label>
+      </div>
+      <label class="check"><input type="checkbox" id="c-dia-inteiro"> Dia inteiro (sem horário)</label>
+      <label>Local ou link<input id="c-local" maxlength="300" placeholder="Fórum de Passos, sala 3 · ou link da videoconferência"></label>
+      <label>Processo<input id="c-processo" maxlength="60"></label>
+      <div class="vinculo" id="c-vinculo" hidden></div>
+      <div>
+        <span class="rotulo">Responsáveis</span>
+        <div class="responsaveis" id="c-responsaveis"></div>
+      </div>
+      <label>Observações<textarea id="c-descricao" rows="3"></textarea></label>
+      <div class="google" id="c-google" hidden></div>
+      <div class="quem" id="c-quem"></div>
+    </div>
+    <div class="dlg-rodape">
+      <button type="button" class="botao-sec" id="c-cumprido" hidden>Marcar como cumprido</button>
+      <span class="espaco"></span>
+      <button type="button" class="botao-sec" id="c-cancelar">Fechar</button>
+      <button type="submit" class="botao" id="c-salvar">Salvar</button>
+    </div>
+  </form>
+</dialog>
+
+<div class="toast" id="toast" hidden></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
