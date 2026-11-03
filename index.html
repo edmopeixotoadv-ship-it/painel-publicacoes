@@ -30,6 +30,7 @@
     <nav class="abas" id="abas" hidden>
       <a href="#publicacoes" data-aba="publicacoes">Publicações</a>
       <a href="#agenda" data-aba="agenda">Agenda</a>
+      <a href="#atendimento" data-aba="atendimento">Atendimento</a>
     </nav>
     <span class="usuario" id="usuario"></span>
     <button id="sair" hidden>Sair</button>
@@ -106,6 +107,51 @@
     <div id="ag-atrasados"></div>
     <div id="ag-conteudo"></div>
   </section>
+
+  <section id="tela-atendimento" hidden>
+    <div id="at-painel">
+      <div class="barra-agenda">
+        <div class="grupo" role="group" aria-label="Mês do painel">
+          <button id="at-mes-anterior" aria-label="Mês anterior">‹</button>
+          <button id="at-mes-proximo" aria-label="Próximo mês">›</button>
+        </div>
+        <strong class="periodo" id="at-mes"></strong>
+        <button class="botao" id="at-novo">+ Novo atendimento</button>
+      </div>
+      <div class="resumo">
+        <div class="cartao-num estatico"><div class="n" id="at-n-fechados">–</div><div class="r">Contratos fechados no mês</div></div>
+        <div class="cartao-num estatico"><div class="n" id="at-n-distribuidas">–</div><div class="r">Ações distribuídas no mês</div></div>
+        <div class="cartao-num estatico"><div class="n" id="at-n-conversao">–</div><div class="r" id="at-r-conversao">Conversão</div></div>
+        <div class="cartao-num estatico"><div class="n" id="at-n-aguardando">–</div><div class="r" id="at-r-aguardando">Aguardando distribuição</div></div>
+      </div>
+      <div class="barra-agenda">
+        <div class="grupo" role="group" aria-label="Lista">
+          <button data-at-filtro="abertos" aria-pressed="true">Em aberto</button>
+          <button data-at-filtro="distribuidas">Ações distribuídas</button>
+          <button data-at-filtro="nao_fechou">Não fecharam</button>
+          <button data-at-filtro="clientes">Clientes</button>
+        </div>
+        <input class="busca at-busca" id="at-busca" type="search" placeholder="Buscar por cliente, parte contrária, CPF/CNPJ ou processo…" aria-label="Buscar atendimentos">
+      </div>
+      <div class="lista" id="at-lista"><div class="vazio">Carregando…</div></div>
+    </div>
+
+    <div id="at-ficha" hidden>
+      <div class="ficha-barra">
+        <a class="botao-sec" href="#atendimento">← Atendimentos</a>
+        <div class="ficha-nome"><strong id="ficha-titulo"></strong> <span id="ficha-situacao"></span><span class="at-sub" id="ficha-estado"></span></div>
+        <span class="espaco"></span>
+        <button class="botao-sec" id="ficha-reabrir" hidden>Reabrir</button>
+        <button class="botao-sec" id="ficha-salvar">Salvar</button>
+        <button class="botao" id="ficha-concluir">Concluir atendimento</button>
+        <button class="botao" id="ficha-distribuir" hidden>Registrar distribuição</button>
+      </div>
+      <nav class="ficha-indice" id="ficha-indice" aria-label="Seções da ficha"></nav>
+      <div class="ficha-aviso" id="ficha-aviso" hidden></div>
+      <p class="at-sub" id="ficha-instrucao"></p>
+      <form id="ficha-form" onsubmit="return false"><fieldset id="ficha-campos"></fieldset></form>
+    </div>
+  </section>
 </main>
 
 <dialog id="dlg">
@@ -161,9 +207,26 @@
   </form>
 </dialog>
 
+<dialog id="dlg-at">
+  <form id="form-at" method="dialog">
+    <div class="dlg-cab">
+      <h2 id="dat-titulo"></h2>
+      <button type="button" class="fechar" data-fechar aria-label="Fechar">×</button>
+    </div>
+    <div class="dlg-corpo" id="dat-corpo"></div>
+    <div class="dlg-rodape">
+      <span class="espaco"></span>
+      <button type="button" class="botao-sec" data-fechar>Cancelar</button>
+      <button type="submit" class="botao" id="dat-ok">Confirmar</button>
+    </div>
+  </form>
+</dialog>
+
 <div class="toast" id="toast" hidden></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="fichas.js"></script>
+<script src="atendimento.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
