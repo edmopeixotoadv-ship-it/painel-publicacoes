@@ -1,6 +1,9 @@
+/* Identidade BLPR: azul-ardósia da logo (#3d4a5f), cinza do "&" (#9a9a9a) e títulos em fonte condensada */
 :root {
-  --bg: #f5f6f8; --painel: #ffffff; --texto: #1c2430; --suave: #5b6675; --borda: #dde1e7;
-  --marca: #1f3a5f; --marca-texto: #ffffff; --destaque: #2f6fb3; --foco: #2f6fb3; --botao-texto: #ffffff;
+  --fonte-titulo: "Oswald", "Arial Narrow", "Helvetica Neue", Arial, sans-serif;
+  --bg: #f4f5f7; --painel: #ffffff; --texto: #1f2733; --suave: #5f6877; --borda: #dcdfe5;
+  --marca: #3d4a5f; --marca-texto: #ffffff; --destaque: #3d4a5f; --foco: #3d4a5f; --botao-texto: #ffffff;
+  --cinza-marca: #9a9a9a; --cab-fundo: #ffffff; --cab-texto: #3d4a5f; --link: #34588a;
   --nova: #c2410c; --nova-fundo: #fff1e6; --ok: #15803d; --ok-fundo: #e8f6ec;
   --perigo: #b91c1c; --perigo-fundo: #fdecec;
   --lida-fundo: #eef1f5; --sombra: 0 1px 2px rgba(16, 24, 40, .06), 0 1px 3px rgba(16, 24, 40, .08);
@@ -10,8 +13,9 @@
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #11151b; --painel: #1a2029; --texto: #e6e9ee; --suave: #9aa5b4; --borda: #2c3542;
-    --marca: #23436b; --marca-texto: #ffffff; --destaque: #7fb0e6; --foco: #7fb0e6; --botao-texto: #0d1a2b;
+    --bg: #12161d; --painel: #1b212b; --texto: #e6e9ee; --suave: #9aa5b4; --borda: #2d3644;
+    --marca: #4a5872; --marca-texto: #ffffff; --destaque: #aab8cf; --foco: #aab8cf; --botao-texto: #12161d;
+    --cinza-marca: #8d8d8d; --cab-fundo: #1b212b; --cab-texto: #e6e9ee; --link: #aab8cf;
     --nova: #fb923c; --nova-fundo: #3a2414; --ok: #4ade80; --ok-fundo: #15301f;
     --perigo: #f87171; --perigo-fundo: #3b1818;
     --lida-fundo: #161b22; --sombra: none;
@@ -27,19 +31,25 @@ button, input, select, textarea { font: inherit; color: inherit; }
 :focus-visible { outline: 2px solid var(--foco); outline-offset: 2px; }
 [hidden] { display: none !important; }
 
-header { background: var(--marca); color: var(--marca-texto); }
-.topo { max-width: 1100px; margin: 0 auto; padding: 12px 16px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
-.topo h1 { font-size: 17px; margin: 0; font-weight: 600; letter-spacing: .2px; }
-.abas { display: flex; gap: 4px; }
-.abas a { color: inherit; text-decoration: none; padding: 5px 12px; border-radius: 6px; opacity: .8; font-size: 14px; }
-.abas a[aria-current="page"] { background: rgba(255,255,255,.16); opacity: 1; font-weight: 600; }
-.topo .usuario { margin-left: auto; font-size: 13px; opacity: .85; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.topo button { background: transparent; border: 1px solid rgba(255,255,255,.4); color: inherit; border-radius: 6px; padding: 5px 10px; cursor: pointer; font-size: 13px; }
+header { background: var(--cab-fundo); color: var(--cab-texto); border-bottom: 1px solid var(--borda); }
+.topo { max-width: 1100px; margin: 0 auto; padding: 10px 16px; display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+.marca-logo { display: flex; align-items: center; gap: 10px; margin: 0; }
+.marca-logo svg { width: 38px; height: 38px; flex-shrink: 0; display: block; }
+.marca-nome { font-family: var(--fonte-titulo); font-size: 22px; font-weight: 500; letter-spacing: 3px; line-height: 1; text-transform: uppercase; }
+.marca-sub { display: block; font-size: 9.5px; letter-spacing: 2.4px; text-transform: uppercase; color: var(--cinza-marca); margin-top: 4px; font-weight: 400; }
+.abas { display: flex; gap: 2px; }
+.abas a { color: var(--suave); text-decoration: none; padding: 6px 12px; font-family: var(--fonte-titulo); font-size: 15px; letter-spacing: 1px; text-transform: uppercase; border-bottom: 2px solid transparent; }
+.abas a[aria-current="page"] { color: var(--cab-texto); border-bottom-color: var(--cinza-marca); }
+.topo .usuario { margin-left: auto; font-size: 13px; color: var(--suave); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topo button { background: transparent; border: 1px solid var(--borda); color: var(--texto); border-radius: 6px; padding: 5px 10px; cursor: pointer; font-size: 13px; }
 
 main { max-width: 1100px; margin: 0 auto; padding: 16px; }
 
 .login { max-width: 400px; margin: 10vh auto; background: var(--painel); border: 1px solid var(--borda); border-radius: 12px; padding: 28px; box-shadow: var(--sombra); }
-.login h2 { margin: 0 0 6px; font-size: 20px; }
+.login-marca { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 12px; margin-bottom: 22px; color: var(--cab-texto); }
+.login-marca svg { width: 72px; height: 72px; }
+.login-marca .marca-nome { font-size: 30px; letter-spacing: 5px; }
+.login h2 { margin: 0 0 6px; font-family: var(--fonte-titulo); font-weight: 500; font-size: 20px; letter-spacing: .5px; }
 .login p { color: var(--suave); margin: 0 0 18px; }
 .login label { display: block; font-size: 13px; color: var(--suave); margin-bottom: 6px; }
 .login input { width: 100%; padding: 10px 12px; border: 1px solid var(--borda); border-radius: 8px; background: var(--bg); }
@@ -154,6 +164,15 @@ dialog::backdrop { background: rgba(10, 15, 25, .45); }
 .dlg-rodape { display: flex; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--borda); align-items: center; flex-wrap: wrap; }
 .espaco { flex: 1; }
 
+/* títulos e números na fonte da marca; links num azul um pouco mais vivo */
+.periodo, .dlg-cab h2, .cartao-num .n, .dia h3, .atrasados h3 { font-family: var(--fonte-titulo); font-weight: 500; letter-spacing: .4px; }
+.cartao-num .n { font-size: 26px; }
+summary, .meta a, .vinculo a, .processo button, .selo-agenda { color: var(--link); }
+.selo-agenda { border-color: var(--link); }
+.tribunal { background: var(--marca); }
+.celula.hoje .num { background: var(--marca); color: #fff; }
+.grupo button[aria-pressed="true"] { background: var(--marca); color: #fff; }
+
 @media (max-width: 760px) {
   .resumo { grid-template-columns: repeat(2, 1fr); }
   .filtros, .filtros-agenda { grid-template-columns: 1fr 1fr; }
@@ -161,6 +180,8 @@ dialog::backdrop { background: rgba(10, 15, 25, .45); }
   .pub-cab { flex-direction: column; }
   .acoes { flex-direction: row; flex-wrap: wrap; gap: 12px; }
   .topo .usuario { display: none; }
+  .marca-sub { display: none; }
+  .marca-nome { font-size: 19px; }
   .barra-agenda .botao { margin-left: 0; width: 100%; }
   .linha3 { grid-template-columns: 1fr 1fr; }
   .linha3 > :first-child { grid-column: 1 / -1; }
