@@ -569,8 +569,9 @@ function telaConfig() {
 
 // ------------------------------------------------------------- diálogo genérico
 
-function abrirDialogo({ titulo, corpo, ok = "Salvar", salvar, excluir, somenteLeitura = false }) {
+function abrirDialogo({ titulo, corpo, ok = "Salvar", salvar, excluir, somenteLeitura = false, extras = "" }) {
   fin.dialogo = { salvar, excluir };
+  $("dfin-extras").innerHTML = extras; // botões do rodapé: funcionam mesmo com o formulário travado
   $("dfin-titulo").textContent = titulo;
   $("dfin-corpo").innerHTML = corpo;
   $("dfin-campos").disabled = somenteLeitura;
@@ -680,6 +681,7 @@ function abrirLancamento(l, base = {}) {
   const saldo = !novo && fin.lancamentos.find((x) => x.restante_de === d.id);
   const original = !novo && d.restante_de && fin.lancamentos.find((x) => x.id === d.restante_de);
   const termo = d.natureza === "receita" ? "recebimento" : "pagamento";
+  const receita = d.natureza === "receita";
   const vinculos = [
     contrato && `Contrato de honorários de <a href="#financeiro/contrato/${esc(contrato.id)}">${esc(contrato.cliente_nome)}</a>`,
     d.parcela && `parcela ${d.parcela}/${d.total_parcelas}`,
@@ -688,11 +690,14 @@ function abrirLancamento(l, base = {}) {
     saldo && `${termo} parcial: <a href="#financeiro/lancamento/${esc(saldo.id)}">saldo de ${moeda(saldo.valor)}</a> ${saldo.pago_em ? "já quitado" : `em aberto, vence ${dataBR(saldo.vencimento)}`}`,
     original && `saldo do ${termo} parcial de <a href="#financeiro/lancamento/${esc(original.id)}">${dataBR(original.pago_em)} (${moeda(original.valor)})</a>`,
   ].filter(Boolean);
-  const botaoParcial = !novo && !reg && !d.pago_em && pode("financeiro", 2)
-    ? `<button type="button" class="botao-sec mini" data-parcial="${esc(d.id)}">Registrar ${termo} parcial</button>` : "";
-  const receita = d.natureza === "receita";
+  const extras = !novo && !d.pago_em && !registroDoRepasse(d) && pode("financeiro", 2)
+    ? `<button type="button" class="botao-sec" data-parcial="${esc(d.id)}">${receita ? "Recebimento" : "Pagamento"} parcial</button>
+       <button type="button" class="botao-sec" data-pagar-dlg="${esc(d.id)}">${receita ? "Marcar recebida" : "Marcar paga"}</button>` : "";
   abrirDialogo({
-    titulo: novo ? `Nova ${receita ? "receita" : "despesa"}` : `Editar ${receita ? "receita" : "despesa"}`,
+    titulo: novo ? `Nova ${receita ? "receita" : "despesa"}`
+      : reg ? `${receita ? "Receita" : "Despesa"} do ${ORIGENS[reg.origem].toLowerCase()} — valores pelo ${ORIGENS[reg.origem].toLowerCase()}`
+        : `Editar ${receita ? "receita" : "despesa"}`,
+    extras,
     somenteLeitura: !pode("financeiro", 2) || !!reg,
     excluir: !novo && !reg && (pode("financeiro", 3) || (pode("financeiro", 2) && !d.pago_em)) ? () => excluirLancamento(d) : null,
     salvar: () => salvarLancamento(l, d),
@@ -721,7 +726,6 @@ function abrirLancamento(l, base = {}) {
       <label class="check"><input type="checkbox" id="fl-agenda" ${compromissoAtivo(d) ? "checked" : ""}> Lembrar do vencimento na Agenda (e no seu Google Agenda)</label>
       <label>Observações<textarea id="fl-obs" rows="2">${esc(d.observacoes || "")}</textarea></label>
       ${vinculos.length ? `<div class="vinculo">${vinculos.join(" · ")}</div>` : ""}
-      ${botaoParcial}
       ${rodapeAutoria(l)}`,
   });
 }
@@ -1282,6 +1286,9 @@ function abrirRecebimento(a, base = {}) {
     somenteLeitura: !pode("financeiro", 2),
     excluir: !novo && (pode("financeiro", 3) || (pode("financeiro", 2) && !d.data_levantamento)) ? () => excluirRecebimento(a) : null,
     salvar: () => salvarRecebimento(a, d),
+    extras: !novo && !d.data_levantamento && d.lancamento_id && pode("financeiro", 2)
+      ? `<button type="button" class="botao-sec" data-parcial="${esc(d.lancamento_id)}">Recebimento parcial</button>
+         <button type="button" class="botao-sec" data-pagar-dlg="${esc(d.lancamento_id)}">Marcar recebida</button>` : "",
     corpo: `
       ${escolhas("fa-origem", Object.entries(ORIGENS), d.origem, !novo)}
       <label>Contrato de honorários (opcional)<select id="fa-contrato">${opcoes(contratos, d.contrato_id, "—")}</select></label>
@@ -1314,8 +1321,6 @@ function abrirRecebimento(a, base = {}) {
       </div>
       <p class="previa" id="fa-previa"></p>
       <label>Observações<textarea id="fa-obs" rows="2">${esc(d.observacoes || "")}</textarea></label>
-      ${!novo && !d.data_levantamento && d.lancamento_id && pode("financeiro", 2)
-        ? `<button type="button" class="botao-sec mini" data-parcial="${esc(d.lancamento_id)}">Registrar recebimento parcial</button>` : ""}
       <p class="at-sub">Gera a receita do valor total (só a parte do escritório entra no resultado e na reserva de imposto) e o repasse ao cliente como conta a pagar.</p>
       ${irmas.length ? `<div class="bloco-dlg"><span class="rotulo">Outras parcelas deste acordo</span>
         <table class="fin mini"><tbody>${irmas.map((x) => `<tr><td>${x.parcela}/${x.total_parcelas}</td><td>${dataBR(x.vencimento)}</td>
@@ -1583,7 +1588,9 @@ function prepararFinanceiro() {
     if (e.target.closest("[data-fechar]")) { fecharDialogo(); return; }
     const t = e.target.closest("button");
     if (!t) return;
-    if (t.dataset.parcial) {
+    if (t.dataset.pagarDlg) {
+      abrirPagamento(fin.lancamentos.find((x) => x.id === t.dataset.pagarDlg));
+    } else if (t.dataset.parcial) {
       abrirPagamento(fin.lancamentos.find((x) => x.id === t.dataset.parcial), true);
     } else if (t.dataset.exito) {
       const c = fin.contratos.find((x) => x.id === t.dataset.exito);
