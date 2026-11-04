@@ -373,3 +373,13 @@ table.perm tr.inativo td { opacity: .6; }
   .venc { flex-wrap: wrap; }
   .venc-link { flex-basis: 100%; }
 }
+/* financeiro, 2ª etapa */
+.valor.transf { color: var(--link); }
+.acoes-linha { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+a.botao-sec.editar { text-decoration: none; color: var(--texto); white-space: nowrap; display: inline-block; }
+.acoes-linha .mini, td .editar { margin-top: 0; }
+.cfg-linha { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
+.cfg-linha label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--suave); }
+.cfg-linha input { padding: 7px 9px; border: 1px solid var(--borda); border-radius: 7px; background: var(--bg); color: var(--texto); }
+table.parcelas input { width: 100%; min-width: 110px; }
+table.parcelas td:first-child { width: 28px; color: var(--suave); }
