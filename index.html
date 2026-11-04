@@ -31,6 +31,8 @@
       <a href="#publicacoes" data-aba="publicacoes">Publicações</a>
       <a href="#agenda" data-aba="agenda">Agenda</a>
       <a href="#atendimento" data-aba="atendimento">Atendimento</a>
+      <a href="#financeiro" data-aba="financeiro">Financeiro</a>
+      <a href="#permissoes" data-aba="permissoes">Permissões</a>
     </nav>
     <span class="usuario" id="usuario"></span>
     <button id="sair" hidden>Sair</button>
@@ -152,6 +154,53 @@
       <form id="ficha-form" onsubmit="return false"><fieldset id="ficha-campos"></fieldset></form>
     </div>
   </section>
+
+  <section id="tela-financeiro" hidden>
+    <div class="barra-agenda">
+      <div class="grupo" role="group" aria-label="Mês">
+        <button id="fin-mes-anterior" aria-label="Mês anterior">‹</button>
+        <button id="fin-mes-proximo" aria-label="Próximo mês">›</button>
+      </div>
+      <strong class="periodo" id="fin-mes"></strong>
+      <span class="espaco"></span>
+      <button class="botao-sec" id="fin-exportar">Exportar para o contador</button>
+      <button class="botao-sec" id="fin-novo-despesa">+ Despesa</button>
+      <button class="botao fin-receita" id="fin-novo-receita">+ Receita</button>
+    </div>
+    <div class="resumo">
+      <div class="cartao-num estatico"><div class="n pos" id="fin-n-entradas">–</div><div class="r">Entradas no mês<small id="fin-r-entradas"></small></div></div>
+      <div class="cartao-num estatico"><div class="n neg" id="fin-n-saidas">–</div><div class="r">Saídas no mês<small id="fin-r-saidas"></small></div></div>
+      <div class="cartao-num estatico"><div class="n" id="fin-n-resultado">–</div><div class="r">Resultado do mês<small id="fin-r-resultado"></small></div></div>
+      <div class="cartao-num estatico"><div class="n" id="fin-n-receber">–</div><div class="r">A receber<small id="fin-r-receber"></small></div></div>
+    </div>
+    <div class="fin-sub" role="group" aria-label="Seções do financeiro">
+      <button data-fin-sub="geral">Visão geral</button>
+      <button data-fin-sub="lancamentos">Lançamentos</button>
+      <button data-fin-sub="receber">A receber</button>
+      <button data-fin-sub="pagar">A pagar</button>
+      <button data-fin-sub="honorarios">Honorários</button>
+      <button data-fin-sub="alvaras">Alvarás e repasses</button>
+      <button data-fin-sub="config">Configurações</button>
+    </div>
+    <div id="fin-conteudo"><div class="vazio">Carregando…</div></div>
+  </section>
+
+  <section id="tela-permissoes" hidden>
+    <div class="barra-agenda">
+      <strong class="periodo">Permissões</strong>
+      <button class="botao" id="perm-nova">+ Adicionar pessoa</button>
+    </div>
+    <div class="perfis" id="perm-perfis"></div>
+    <div class="bloco rol">
+      <h3>Quem pode fazer o quê</h3>
+      <p class="at-sub">Escolha um perfil ou ajuste área por área. Quem é desativado não entra mais, mas o histórico do que fez continua. As regras valem no banco de dados, não só nesta tela.</p>
+      <table class="fin perm"><thead><tr id="perm-cab"></tr></thead><tbody id="perm-corpo"></tbody></table>
+    </div>
+    <div class="bloco">
+      <h3>Histórico de alterações</h3>
+      <div id="perm-historico"></div>
+    </div>
+  </section>
 </main>
 
 <dialog id="dlg">
@@ -222,11 +271,30 @@
   </form>
 </dialog>
 
+<dialog id="dlg-fin">
+  <form id="form-fin" method="dialog">
+    <div class="dlg-cab">
+      <h2 id="dfin-titulo"></h2>
+      <button type="button" class="fechar" data-fechar aria-label="Fechar">×</button>
+    </div>
+    <fieldset class="dlg-corpo sem-borda" id="dfin-campos"><div class="dlg-corpo-int" id="dfin-corpo"></div></fieldset>
+    <div class="dlg-rodape">
+      <button type="button" class="botao-sec perigo" id="dfin-excluir" hidden>Excluir</button>
+      <span class="espaco"></span>
+      <button type="button" class="botao-sec" data-fechar>Fechar</button>
+      <button type="submit" class="botao" id="dfin-ok">Salvar</button>
+    </div>
+  </form>
+</dialog>
+<datalist id="fin-clientes"></datalist>
+
 <div class="toast" id="toast" hidden></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 <script src="fichas.js"></script>
 <script src="atendimento.js"></script>
+<script src="financeiro.js"></script>
+<script src="permissoes.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
