@@ -86,7 +86,10 @@ function rotearAtendimento(id, extra) {
     renderizarAtendimentos();
     return;
   }
-  if (id === "novo") return abrirFicha({ ficha: extra, dados: {} });
+  if (id === "novo") {
+    if (!pode("atendimento", 2)) { location.hash = "#atendimento"; return; }
+    return abrirFicha({ ficha: extra, dados: {} });
+  }
   if (at.ficha?.atendimento.id === id) return;
   if (!at.carregado) return; // carregarAtendimentos chama rotear de novo ao terminar
   const a = at.lista.find((x) => x.id === id);
@@ -170,9 +173,18 @@ function itemAtendimento(a) {
     </a>
     <span class="at-acoes">
       ${seloSituacao(a)}
-      ${a.situacao === "aguardando_distribuicao" ? `<button class="botao-sec" data-distribuir="${esc(a.id)}">Registrar distribuição</button>` : ""}
+      ${a.situacao === "aguardando_distribuicao" && pode("atendimento", 3) ? `<button class="botao-sec" data-distribuir="${esc(a.id)}">Registrar distribuição</button>` : ""}
+      ${botaoHonorarios(a)}
     </span>
   </article>`;
+}
+
+// contrato fechado: atalho para cadastrar (ou ver) os honorários no Financeiro
+function botaoHonorarios(a) {
+  if (!["aguardando_distribuicao", "distribuida"].includes(a.situacao) || !pode("financeiro")) return "";
+  const contrato = fin.contratos.find((c) => c.atendimento_id === a.id);
+  if (contrato) return `<a class="botao-sec" href="#financeiro/contrato/${esc(contrato.id)}">💰 Honorários</a>`;
+  return pode("financeiro", 2) ? `<a class="botao-sec" href="#financeiro/contrato/novo/${esc(a.id)}">💰 Cadastrar honorários</a>` : "";
 }
 
 function renderizarClientes(busca, buscaDoc) {
@@ -308,7 +320,8 @@ function abrirFicha(a) {
     dados[modelo.dataAtendimento] = hoje();
     dados[modelo.atendente] = estado.eu;
   }
-  at.ficha = { atendimento, modelo, versao: 0, salva: 0, somenteLeitura: atendimento.situacao !== "em_atendimento" };
+  at.ficha = { atendimento, modelo, versao: 0, salva: 0,
+    somenteLeitura: atendimento.situacao !== "em_atendimento" || !pode("atendimento", 2) };
   $("at-painel").hidden = true;
   $("at-ficha").hidden = false;
   $("ficha-titulo").textContent = `${NOMES_AREA[modelo.area]} · ${modelo.titulo}`;
@@ -327,9 +340,9 @@ function atualizarCabecalhoFicha() {
   const { atendimento: a, somenteLeitura } = at.ficha;
   $("ficha-campos").disabled = somenteLeitura;
   $("ficha-salvar").hidden = somenteLeitura;
-  $("ficha-concluir").hidden = somenteLeitura;
-  $("ficha-distribuir").hidden = a.situacao !== "aguardando_distribuicao";
-  $("ficha-reabrir").hidden = !["aguardando_distribuicao", "nao_fechou"].includes(a.situacao);
+  $("ficha-concluir").hidden = somenteLeitura || !pode("atendimento", 3);
+  $("ficha-distribuir").hidden = a.situacao !== "aguardando_distribuicao" || !pode("atendimento", 3);
+  $("ficha-reabrir").hidden = !["aguardando_distribuicao", "nao_fechou"].includes(a.situacao) || !pode("atendimento", 3);
   $("ficha-situacao").innerHTML = a.id ? seloSituacao(a) : '<span class="selo-at em_atendimento">Novo</span>';
   const avisos = [];
   if (a.situacao === "aguardando_distribuicao") {
@@ -341,7 +354,8 @@ function atualizarCabecalhoFicha() {
   if (a.situacao === "nao_fechou") avisos.push(`Não fechou contrato${a.motivo_nao_fechou ? `: ${esc(a.motivo_nao_fechou)}` : ""}.`);
   if (a.arquivo_md) avisos.push(`Ficha em Markdown: <a href="${esc(linkArquivo(a))}" target="_blank" rel="noopener">abrir no GitHub</a>.`);
   if (a.arquivo_erro) avisos.push(`<span class="erro">⚠ O arquivo .md não foi gravado: ${esc(a.arquivo_erro)}</span>`);
-  if (somenteLeitura && a.situacao !== "distribuida") avisos.push("A ficha está travada. Para corrigir, use “Reabrir”.");
+  if (!pode("atendimento", 2)) avisos.push("Você pode consultar esta ficha, mas não alterá-la.");
+  else if (somenteLeitura && a.situacao !== "distribuida") avisos.push("A ficha está travada. Para corrigir, use “Reabrir”.");
   $("ficha-aviso").hidden = !avisos.length;
   $("ficha-aviso").innerHTML = avisos.join("<br>");
   $("ficha-estado").textContent = a.atualizado_em
