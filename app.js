@@ -1,7 +1,8 @@
 // Painel de publicações, agenda e atendimentos.
 // Página pública, dados protegidos: só e-mails em usuarios_autorizados conseguem ler (regras no banco).
 // A agenda grava pela função "agenda", que também atualiza o Google Agenda de cada responsável.
-// A aba Atendimento fica em atendimento.js (fichas em fichas.js).
+// A aba Atendimento fica em atendimento.js (fichas em fichas.js); Financeiro em financeiro.js;
+// Permissões em permissoes.js. Cada pessoa tem um nível por área (regras no banco: public.nivel).
 
 const SUPABASE_URL = "https://bmfpgicxosfshvbzntqo.supabase.co";
 const SUPABASE_CHAVE_PUBLICA = "sb_publishable_F17uRoLf_Z8gR-xD0Nt7-g_qgW64XJn";
@@ -9,16 +10,19 @@ const POR_PAGINA = 50;
 const FUSO = "America/Sao_Paulo";
 const TIPOS = {
   prazo: "Prazo", audiencia: "Audiência", reuniao: "Reunião",
-  atendimento: "Atendimento", sustentacao_oral: "Sustentação oral", distribuicao: "Distribuição", outro: "Outro",
+  atendimento: "Atendimento", sustentacao_oral: "Sustentação oral", distribuicao: "Distribuição", financeiro: "Financeiro", outro: "Outro",
 };
 const DIAS_SEMANA = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
+const ABAS = ["publicacoes", "agenda", "atendimento", "financeiro", "permissoes"];
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_CHAVE_PUBLICA);
 const $ = (id) => document.getElementById(id);
 
 const estado = {
   eu: null,
-  equipe: [],
+  perfil: null,     // cadastro de quem está usando (com permissoes)
+  equipe: [],       // pessoas ativas (responsáveis da agenda)
+  pessoas: [],      // todas, inclusive desativadas
   publicacoes: [],
   compromissos: [],
   feriados: new Map(),
@@ -72,14 +76,25 @@ function nomeDia(iso) {
 }
 
 function nomePessoa(email) {
-  const p = estado.equipe.find((e) => e.email === email);
+  const p = estado.pessoas.find((e) => e.email === email);
   return p?.nome || email;
 }
 
 // ------------------------------------------------------------- login e carga
 
 function mostrar(tela) {
-  for (const t of ["tela-login", "tela-negado", "tela-publicacoes", "tela-agenda", "tela-atendimento"]) $(t).hidden = t !== tela;
+  for (const t of ["tela-login", "tela-negado", ...ABAS.map((a) => `tela-${a}`)]) $(t).hidden = t !== tela;
+}
+
+// nível da pessoa logada na área (0 = não vê); as mesmas regras valem no banco
+function pode(area, minimo = 1) {
+  return Number(estado.perfil?.permissoes?.[area] ?? 0) >= minimo;
+}
+
+function aplicarPermissoes() {
+  document.querySelectorAll(".abas a[data-aba]").forEach((a) => { a.hidden = !pode(a.dataset.aba); });
+  $("ag-novo").hidden = !pode("agenda", 2);
+  $("at-novo").hidden = !pode("atendimento", 2);
 }
 
 async function iniciar() {
@@ -89,16 +104,27 @@ async function iniciar() {
   estado.eu = email;
   $("usuario").textContent = email;
   $("sair").hidden = false;
-  const { data: equipe } = await sb.from("usuarios_autorizados").select("email, nome").order("nome");
-  if (!equipe?.some((e) => e.email === email)) {
+  const { data: pessoas } = await sb.from("usuarios_autorizados").select("*").order("nome");
+  const eu = pessoas?.find((e) => e.email === email);
+  if (!eu?.ativo) {
     $("email-negado").textContent = email;
     return mostrar("tela-negado");
   }
-  estado.equipe = equipe;
+  estado.perfil = eu;
+  estado.pessoas = pessoas;
+  estado.equipe = pessoas.filter((p) => p.ativo);
+  $("usuario").textContent = eu.nome || email;
   $("abas").hidden = false;
+  aplicarPermissoes();
   preencherFiltrosAgenda();
   mostrar(`tela-${abaAtual()}`);
-  await Promise.all([carregarPublicacoes(), carregarAgenda(), carregarAtendimentos()]);
+  await Promise.all([
+    pode("publicacoes") && carregarPublicacoes(),
+    pode("agenda") && carregarAgenda(),
+    (pode("atendimento") || pode("financeiro")) && carregarAtendimentos(),
+    pode("financeiro") && carregarFinanceiro(),
+    pode("permissoes", 3) && carregarPermissoes(),
+  ]);
   rotear();
 }
 
@@ -136,7 +162,9 @@ async function carregarAgenda() {
 
 function abaAtual() {
   const aba = location.hash.replace(/^#/, "").split("/")[0];
-  return ["agenda", "atendimento"].includes(aba) ? aba : "publicacoes";
+  const permitidas = ABAS.filter((a) => pode(a, a === "permissoes" ? 3 : 1));
+  if (permitidas.includes(aba)) return aba;
+  return permitidas[0] || "publicacoes";
 }
 
 function rotear() {
@@ -145,6 +173,8 @@ function rotear() {
   // quem sai de uma ficha com alterações não perde nada: grava antes de trocar de tela
   if (fichaAlterada() && !(aba === "atendimento" && id === at.ficha.atendimento.id)) salvarFicha();
   if (estado.eu && estado.equipe.length) mostrar(`tela-${aba}`);
+  if (aba !== "agenda" && $("dlg").open) $("dlg").close();
+  if (aba !== "financeiro" && aba !== "permissoes" && $("dlg-fin").open) $("dlg-fin").close();
   document.querySelectorAll(".abas a").forEach((a) => {
     if (a.dataset.aba === aba) a.setAttribute("aria-current", "page");
     else a.removeAttribute("aria-current");
@@ -154,6 +184,8 @@ function rotear() {
     if (c) abrirFormulario(c);
   }
   if (aba === "atendimento") rotearAtendimento(id, extra);
+  if (aba === "financeiro") rotearFinanceiro(id, extra);
+  if (aba === "permissoes") renderizarPermissoes();
 }
 
 // ------------------------------------------------------------- publicações
@@ -203,6 +235,7 @@ function cartaoPublicacao(p) {
   const seloAgenda = agendados.length
     ? `<button class="selo-agenda" data-abrir="${esc(agendados[0].id)}">📅 ${agendados.length === 1 ? dataBR(diaLocal(agendados[0].inicio)) : `${agendados.length} compromissos`}</button>`
     : "";
+  const marca = pode("publicacoes", 2) ? "" : "disabled";
   const quem = p.atualizado_por ? `Última marcação: ${esc(nomePessoa(p.atualizado_por))} em ${new Date(p.atualizado_em).toLocaleString("pt-BR")}` : "";
   return `
   <article class="${classes}" data-chave="${esc(p.chave)}">
@@ -214,9 +247,9 @@ function cartaoPublicacao(p) {
         ${p.partes?.length ? `<div class="partes">${esc(p.partes.join("; "))}</div>` : ""}
       </div>
       <div class="acoes">
-        <label><input type="checkbox" data-campo="lida" ${p.lida ? "checked" : ""}> Lida</label>
-        <label><input type="checkbox" data-campo="providenciada" ${p.providenciada ? "checked" : ""}> Providenciada</label>
-        <button class="botao-sec" data-agendar="${esc(p.chave)}">📅 Agendar</button>
+        <label><input type="checkbox" data-campo="lida" ${p.lida ? "checked" : ""} ${marca}> Lida</label>
+        <label><input type="checkbox" data-campo="providenciada" ${p.providenciada ? "checked" : ""} ${marca}> Providenciada</label>
+        ${pode("agenda", 2) ? `<button class="botao-sec" data-agendar="${esc(p.chave)}">📅 Agendar</button>` : ""}
       </div>
     </div>
     <details>
@@ -228,7 +261,7 @@ function cartaoPublicacao(p) {
           Fonte: ${esc(p.fonte || "")}${p.link ? ` · <a href="${esc(p.link)}" target="_blank" rel="noopener">abrir no tribunal</a>` : ""}
         </div>
         <label class="meta" for="obs-${esc(p.chave)}">Anotações da equipe</label>
-        <textarea class="obs" id="obs-${esc(p.chave)}" data-campo="observacao" placeholder="Ex.: prazo de 15 dias úteis, peça protocolada em…">${esc(p.observacao || "")}</textarea>
+        <textarea class="obs" id="obs-${esc(p.chave)}" data-campo="observacao" ${marca} placeholder="Ex.: prazo de 15 dias úteis, peça protocolada em…">${esc(p.observacao || "")}</textarea>
         <div class="quem">${quem}</div>
       </div>
     </details>
@@ -246,9 +279,10 @@ async function salvarMarcacao(chave, campo, valor) {
 // ------------------------------------------------------------- agenda: listagem
 
 function preencherFiltrosAgenda() {
-  const tipos = Object.entries(TIPOS).map(([v, r]) => `<option value="${v}">${r}</option>`).join("");
-  $("ag-tipo").innerHTML = '<option value="">Todos os tipos</option>' + tipos;
-  $("c-tipo").innerHTML = tipos;
+  const opcoes = (lista) => lista.map(([v, r]) => `<option value="${v}">${r}</option>`).join("");
+  const visiveis = Object.entries(TIPOS).filter(([v]) => v !== "financeiro" || pode("financeiro"));
+  $("ag-tipo").innerHTML = '<option value="">Todos os tipos</option>' + opcoes(visiveis);
+  $("c-tipo").innerHTML = opcoes(visiveis.filter(([v]) => v !== "financeiro"));
   $("ag-responsavel").innerHTML = '<option value="">Todos os responsáveis</option>' +
     estado.equipe.map((p) => `<option value="${esc(p.email)}">${esc(p.nome || p.email)}</option>`).join("");
 }
@@ -440,6 +474,12 @@ function atualizarTipo() {
 function abrirFormulario(c) {
   estado.editando = c?.id ? c : null;
   const novo = !c?.id;
+  // vencimento do financeiro: o tipo aparece só para ele; edita-se pelo lançamento
+  const tipoFin = c?.tipo === "financeiro";
+  [...$("c-tipo").options].forEach((o) => { if (o.value === "financeiro") o.remove(); });
+  if (tipoFin) $("c-tipo").insertAdjacentHTML("beforeend", '<option value="financeiro">Financeiro</option>');
+  $("c-tipo").disabled = tipoFin;
+  $("c-salvar").hidden = !(tipoFin ? pode("financeiro", 2) : pode("agenda", 2));
   $("dlg-titulo").textContent = novo ? "Novo compromisso" : "Editar compromisso";
   $("c-tipo").value = c?.tipo || "prazo";
   $("c-situacao").value = c?.situacao || "pendente";
@@ -454,7 +494,8 @@ function abrirFormulario(c) {
   $("c-vinculo").dataset.chave = c?.publicacao_chave || "";
   const pub = c?.publicacao_chave && estado.publicacoes.find((p) => p.chave === c.publicacao_chave);
   const atend = c?.id && at.lista.find((a) => a.compromisso_id === c.id);
-  $("c-vinculo").hidden = !pub && !atend;
+  const lanc = tipoFin && fin.lancamentos.find((l) => l.compromisso_id === c.id);
+  $("c-vinculo").hidden = !pub && !atend && !lanc;
   if (pub) {
     $("c-vinculo").innerHTML = `Vinculado à publicação de ${dataBR(pub.data)} · ${esc(pub.tribunal)} · ${esc(pub.processo || "")} ` +
       `<a href="#publicacoes" data-ver-pub="${esc(pub.chave)}">ver publicação</a>`;
@@ -462,6 +503,9 @@ function abrirFormulario(c) {
     $("c-vinculo").innerHTML = `Vinculado ao atendimento de ${dataBR(atend.data_atendimento)} · ${esc(tituloAtendimento(atend))} ` +
       `<a href="#atendimento/${esc(atend.id)}">abrir ficha</a>` +
       (atend.situacao === "aguardando_distribuicao" ? " · registre a distribuição pela ficha, com o número do processo" : "");
+  } else if (lanc) {
+    $("c-vinculo").innerHTML = `Vencimento do financeiro · ${esc(lanc.descricao)} · ${moeda(lanc.valor)} ` +
+      `<a href="#financeiro/lancamento/${esc(lanc.id)}">abrir lançamento</a> · data e situação mudam pelo lançamento`;
   }
   $("k-disp").value = pub?.data || "";
   $("k-resultado").hidden = true;
@@ -479,7 +523,7 @@ function abrirFormulario(c) {
   $("c-quem").textContent = novo ? "" :
     `Criado por ${nomePessoa(c.criado_por)} em ${new Date(c.criado_em).toLocaleString("pt-BR")}` +
     (c.atualizado_por ? ` · última alteração: ${nomePessoa(c.atualizado_por)} em ${new Date(c.atualizado_em).toLocaleString("pt-BR")}` : "");
-  $("c-cumprido").hidden = novo || c.situacao !== "pendente";
+  $("c-cumprido").hidden = novo || c.situacao !== "pendente" || tipoFin || !pode("agenda", 2);
   atualizarTipo();
   atualizarHorarios();
   if (!$("dlg").open) $("dlg").showModal();
@@ -628,5 +672,7 @@ $("c-vinculo").addEventListener("click", (e) => {
 
 window.addEventListener("hashchange", rotear);
 prepararAtendimento();
+prepararFinanceiro();
+prepararPermissoes();
 sb.auth.onAuthStateChange((evento) => { if (evento === "SIGNED_IN" && !estado.eu) iniciar(); });
 iniciar();
