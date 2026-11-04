@@ -834,7 +834,7 @@ function abrirPagamento(l, parcial = false) {
   const reg = registroDe(l);
   const verbo = l.natureza === "receita" ? "recebida" : l.natureza === "despesa" ? "paga" : "realizada";
   const termo = l.natureza === "receita" ? "Recebimento" : "Pagamento";
-  const podeParcial = !reg && l.natureza !== "transferencia";
+  const podeParcial = l.natureza !== "transferencia" && !registroDoRepasse(l);
   abrirDialogo({
     titulo: `Marcar como ${verbo}`,
     ok: "Confirmar",
@@ -846,7 +846,8 @@ function abrirPagamento(l, parcial = false) {
         if (valor >= Number(l.valor)) { avisar(`No ${termo.toLowerCase()} parcial, o valor tem de ser menor que ${moeda(l.valor)}.`); return; }
         const vencSaldo = $("fp-venc-saldo").value;
         if (!vencSaldo) { avisar("Informe o vencimento do saldo."); return; }
-        return executar(() => registrarParcial(l, { pago_em, valor, conta_id: $("fp-conta").value || null, vencSaldo }),
+        const dados = { pago_em, valor, conta_id: $("fp-conta").value || null, vencSaldo };
+        return executar(() => (reg ? registrarParcialRecebimento(reg, l, dados) : registrarParcial(l, dados)),
           `${termo} parcial registrado. Saldo de ${moeda(centavos(l.valor - valor))} continua em aberto.`);
       }
       return executar(async () => {
@@ -855,8 +856,7 @@ function abrirPagamento(l, parcial = false) {
           const mudanca = registroDoTotal(l)
             ? { data_levantamento: pago_em, conta_id: $("fp-conta").value || reg.conta_id }
             : { repassado_em: pago_em };
-          await gravarRecebimento({ ...reg, ...mudanca });
-          return null;
+          return (await gravarRecebimento({ ...reg, ...mudanca })).aviso;
         }
         const mudancas = { pago_em };
         if (l.natureza !== "transferencia") mudancas.conta_id = $("fp-conta").value || null;
@@ -895,10 +895,16 @@ function atualizarPreviaPagamento() {
   const parcial = $("fp-parcial").checked;
   $("fp-resto").hidden = !parcial;
   $("fp-valor-rotulo").textContent = parcial ? `Valor ${l.natureza === "receita" ? "recebido" : "pago"} agora (R$)` : "Valor (R$)";
+  if (registroDoTotal(l)) { // alvará/acordo: o valor só muda no parcial
+    $("fp-valor").disabled = !parcial;
+    if (!parcial) $("fp-valor").value = valorCampo(l.valor);
+  }
   const valor = lerValor($("fp-valor").value) || 0;
   const resto = centavos(Number(l.valor) - valor);
   $("fp-previa").innerHTML = parcial
-    ? (resto > 0 ? `Fica em aberto: <strong>${moeda(resto)}</strong> (de ${moeda(l.valor)})` : `<span class="atrasado">O valor tem de ser menor que ${moeda(l.valor)}.</span>`)
+    ? (resto > 0 ? `Fica em aberto: <strong>${moeda(resto)}</strong> (de ${moeda(l.valor)})` +
+      (registroDoTotal(l) ? ". Honorários e repasse ao cliente se dividem na mesma proporção." : "")
+      : `<span class="atrasado">O valor tem de ser menor que ${moeda(l.valor)}.</span>`)
     : "";
 }
 
@@ -1308,6 +1314,8 @@ function abrirRecebimento(a, base = {}) {
       </div>
       <p class="previa" id="fa-previa"></p>
       <label>Observações<textarea id="fa-obs" rows="2">${esc(d.observacoes || "")}</textarea></label>
+      ${!novo && !d.data_levantamento && d.lancamento_id && pode("financeiro", 2)
+        ? `<button type="button" class="botao-sec mini" data-parcial="${esc(d.lancamento_id)}">Registrar recebimento parcial</button>` : ""}
       <p class="at-sub">Gera a receita do valor total (só a parte do escritório entra no resultado e na reserva de imposto) e o repasse ao cliente como conta a pagar.</p>
       ${irmas.length ? `<div class="bloco-dlg"><span class="rotulo">Outras parcelas deste acordo</span>
         <table class="fin mini"><tbody>${irmas.map((x) => `<tr><td>${x.parcela}/${x.total_parcelas}</td><td>${dataBR(x.vencimento)}</td>
@@ -1382,7 +1390,7 @@ function salvarRecebimento(a, d) {
   }
   return executar(async () => {
     let aviso = null;
-    for (const r of registros) aviso = (await gravarRecebimento(r)) || aviso;
+    for (const r of registros) aviso = (await gravarRecebimento(r)).aviso || aviso;
     return aviso;
   }, registros.length > 1 ? `Acordo salvo com ${registros.length} parcelas.` : "Salvo.");
 }
@@ -1398,7 +1406,8 @@ async function gravarRecebimento(r) {
   guardar(fin.alvaras, salvo);
 
   const rotulo = salvo.origem === "acordo" ? "Acordo" : "Alvará";
-  const sufixo = salvo.total_parcelas > 1 ? ` (${salvo.parcela}/${salvo.total_parcelas})` : "";
+  const saldoDeParcial = !!fin.lancamentos.find((l) => l.id === salvo.lancamento_id)?.restante_de;
+  const sufixo = (salvo.total_parcelas > 1 ? ` (${salvo.parcela}/${salvo.total_parcelas})` : "") + (saldoDeParcial ? " (saldo)" : "");
   const proc = salvo.processo ? ` · ${salvo.processo}` : "";
   const comum = { cliente_nome: salvo.cliente_nome, cliente_id: salvo.cliente_id, processo: salvo.processo, conta_id: salvo.conta_id };
   const totalLanc = await gravarLancamento(salvo.lancamento_id, {
@@ -1426,7 +1435,29 @@ async function gravarRecebimento(r) {
     if (ligado) guardar(fin.alvaras, ligado);
   }
   await atualizarReserva(totalLanc);
-  return aviso;
+  return { aviso, registro: fin.alvaras.find((x) => x.id === salvo.id), total: totalLanc };
+}
+
+// recebimento parcial de alvará ou parcela de acordo: honorários, custas e repasse se dividem na mesma proporção
+async function registrarParcialRecebimento(original, l, { pago_em, valor, conta_id, vencSaldo }) {
+  const reg = { ...original }; // valores de antes da gravação
+  const total = Number(reg.valor_levantado);
+  const honPago = centavos((Number(reg.honorarios) * valor) / total);
+  const descPago = Math.min(Number(reg.descontos), centavos(valor - honPago));
+  const pago = await gravarRecebimento({
+    ...reg, valor_levantado: valor, honorarios: honPago, descontos: descPago,
+    data_levantamento: pago_em, conta_id: conta_id || reg.conta_id,
+  });
+  const saldo = await gravarRecebimento({
+    origem: reg.origem, cliente_nome: reg.cliente_nome, cliente_id: reg.cliente_id, processo: reg.processo,
+    contrato_id: reg.contrato_id, conta_id: reg.conta_id, percentual: reg.percentual, observacoes: reg.observacoes,
+    valor_levantado: centavos(total - valor), honorarios: centavos(Number(reg.honorarios) - honPago),
+    descontos: centavos(Number(reg.descontos) - descPago), vencimento: vencSaldo, data_levantamento: null, repassado_em: null,
+    parcela: reg.parcela, total_parcelas: reg.total_parcelas, grupo: reg.grupo,
+  });
+  // liga a receita do saldo à receita recebida e marca a descrição
+  await gravarLancamento(saldo.total.id, { restante_de: pago.total.id, descricao: `${saldo.total.descricao} (saldo)` });
+  return pago.aviso || saldo.aviso;
 }
 
 function excluirRecebimento(a) {
