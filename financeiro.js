@@ -1,20 +1,24 @@
-// Aba Financeiro: lançamentos, contas a receber e a pagar, honorários por contrato, alvarás e repasses.
+// Aba Financeiro: lançamentos, transferências entre contas, contas a receber e a pagar,
+// contratos de honorários (parcelados, êxito e fixo mensal), alvarás e acordos com repasse ao cliente
+// e reserva automática de imposto na poupança.
 // Grava direto no banco; as regras por nível (public.nivel('financeiro')) valem lá:
-// 1 vê e exporta, 2 lança, 3 administra (contas, categorias e exclusões).
-// Vencimentos podem ir para a agenda pela função "agenda", com o tipo "financeiro",
-// que só aparece para quem também vê o financeiro.
+// 1 vê e exporta, 2 lança, 3 administra (contas, categorias, configurações e exclusões de valores pagos).
+// Vencimentos podem ir para a agenda pela função "agenda", com o tipo "financeiro".
 // Usa as utilidades de app.js ($, esc, sb, estado, avisar, pode...) e de atendimento.js (at, normalizarNome).
 
 const SUBS_FIN = {
   geral: "Visão geral", lancamentos: "Lançamentos", receber: "A receber", pagar: "A pagar",
-  honorarios: "Honorários", alvaras: "Alvarás e repasses", config: "Configurações",
+  honorarios: "Honorários", alvaras: "Alvarás e acordos", config: "Configurações",
 };
-const TIPOS_CONTA = { banco: "Banco", caixa: "Caixa", cartao: "Cartão de crédito", outro: "Outro" };
-const TIPOS_CONTRATO = { fixo: "Fixo", exito: "Êxito", fixo_exito: "Fixo + êxito" };
+const TIPOS_CONTA = { banco: "Banco", poupanca: "Poupança", caixa: "Caixa", cartao: "Cartão de crédito", outro: "Outro" };
+const TIPOS_CONTRATO = { fixo: "Parcelado", mensal: "Fixo mensal", exito: "Êxito", fixo_exito: "Parcelado + êxito" };
 const SITUACOES_CONTRATO = { ativo: "Ativo", encerrado: "Encerrado", cancelado: "Cancelado" };
+const NATUREZAS = { receita: "Receita", despesa: "Despesa", transferencia: "Transferência" };
+const ORIGENS = { alvara: "Alvará judicial", acordo: "Acordo" };
+const MESES_MENSAL = 12; // contratos fixos mensais ficam sempre com 12 meses lançados à frente
 
 const fin = {
-  contas: [], categorias: [], lancamentos: [], contratos: [], alvaras: [],
+  contas: [], categorias: [], lancamentos: [], contratos: [], alvaras: [], config: null,
   carregado: false,
   mes: null,
   sub: "geral",
@@ -27,6 +31,7 @@ const formatoMoeda = new Intl.NumberFormat("pt-BR", { style: "currency", currenc
 const formatoMoedaCurta = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL", maximumFractionDigits: 0 });
 function moeda(v) { return formatoMoeda.format(Number(v || 0)); }
 function moedaCurta(v) { return formatoMoedaCurta.format(Number(v || 0)); }
+const centavos = (v) => Math.round(Number(v || 0) * 100) / 100;
 
 // aceita "1.234,56", "1234,56", "1234.56" e "R$ 800"
 function lerValor(s) {
@@ -34,39 +39,72 @@ function lerValor(s) {
   if (!t) return NaN;
   if (t.includes(",")) t = t.replace(/\./g, "").replace(",", ".");
   const n = Number(t);
-  return Number.isFinite(n) ? Math.round(n * 100) / 100 : NaN;
+  return Number.isFinite(n) ? centavos(n) : NaN;
 }
 
 function valorCampo(v) {
   return v == null || v === "" ? "" : Number(v).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+function percentualCampo(v) { return v == null || v === "" ? "" : String(Number(v)).replace(".", ","); }
+
 // mesmo dia nos meses seguintes (31/01 + 1 mês = 28 ou 29/02)
-function somarMeses(iso, n) {
+function somarMeses(iso, n, dia) {
   const [a, m, d] = iso.split("-").map(Number);
   const alvo = new Date(Date.UTC(a, m - 1 + n, 1));
   const ultimo = new Date(Date.UTC(alvo.getUTCFullYear(), alvo.getUTCMonth() + 1, 0)).getUTCDate();
-  alvo.setUTCDate(Math.min(d, ultimo));
+  alvo.setUTCDate(Math.min(dia || d, ultimo));
   return alvo.toISOString().slice(0, 10);
 }
 
 function nomeMes(mes) {
   return new Date(`${mes}-15T12:00:00Z`).toLocaleDateString("pt-BR", { month: "long", year: "numeric", timeZone: "UTC" });
 }
+const mesBR = (mes) => `${mes.slice(5, 7)}/${mes.slice(0, 4)}`;
 
-const nomeConta = (id) => fin.contas.find((c) => c.id === id)?.nome || "";
-const nomeCategoria = (id) => fin.categorias.find((c) => c.id === id)?.nome || "Sem categoria";
+const conta = (id) => fin.contas.find((c) => c.id === id);
+const nomeConta = (id) => conta(id)?.nome || "";
+const categoria = (id) => fin.categorias.find((c) => c.id === id);
+const nomeCategoria = (id) => categoria(id)?.nome || "Sem categoria";
 const categoriaPorNome = (nome, natureza) =>
-  fin.categorias.find((c) => c.nome === nome && c.natureza === natureza && c.ativa) ||
+  fin.categorias.find((c) => c.nome === nome && c.natureza === natureza) ||
   fin.categorias.find((c) => c.natureza === natureza && c.ativa);
-const contaPadrao = () => fin.contas.find((c) => c.ativa)?.id || null;
+const contaPoupanca = () => fin.contas.find((c) => c.tipo === "poupanca" && c.ativa);
+const contaPadrao = () => (fin.contas.find((c) => c.ativa && !["poupanca", "cartao"].includes(c.tipo)) || fin.contas.find((c) => c.ativa))?.id || null;
 const emAtraso = (l) => !l.pago_em && l.vencimento < hoje();
-const soma = (lista) => lista.reduce((t, l) => t + Number(l.valor || 0), 0);
+const soma = (lista, f = (l) => l.valor) => centavos(lista.reduce((t, l) => t + Number(f(l) || 0), 0));
+const registroDoTotal = (l) => fin.alvaras.find((a) => a.lancamento_id === l.id);
+const registroDoRepasse = (l) => fin.alvaras.find((a) => a.repasse_lancamento_id === l.id);
+const registroDe = (l) => registroDoTotal(l) || registroDoRepasse(l);
+
+// quanto do lançamento é do escritório (o que entra no resultado do mês)
+function valorResultado(l) {
+  if (l.natureza === "transferencia") return 0;
+  const reg = registroDoTotal(l);
+  if (reg) return Number(reg.honorarios) + Number(reg.descontos);
+  return categoria(l.categoria_id)?.resultado === false ? 0 : Number(l.valor);
+}
+
+// base da reserva de imposto: só a parte do escritório, recebida a partir da data de início da reserva
+function baseImposto(l) {
+  if (l.natureza !== "receita" || !l.pago_em || l.pago_em < (fin.config?.reserva_desde || "9999")) return 0;
+  const reg = registroDoTotal(l);
+  if (reg) return Number(reg.honorarios);
+  return categoria(l.categoria_id)?.resultado === false ? 0 : Number(l.valor);
+}
+
+// valor que conta como honorários recebidos num contrato
+function valorDoContrato(l) {
+  const reg = registroDoTotal(l);
+  return reg ? Number(reg.honorarios) : Number(l.valor);
+}
 
 function guardar(lista, item) {
   const i = lista.findIndex((x) => x.id === item.id);
   if (i >= 0) lista[i] = item; else lista.push(item);
 }
+
+function retirar(nome, id) { fin[nome] = fin[nome].filter((x) => x.id !== id); }
 
 function clientePorNome(nome) {
   const alvo = normalizarNome(nome);
@@ -78,8 +116,8 @@ function opcoes(lista, atual, vazio) {
     lista.map(([v, r]) => `<option value="${esc(v)}" ${v === atual ? "selected" : ""}>${esc(r)}</option>`).join("");
 }
 
-function opcoesContas(atual) {
-  return opcoes(fin.contas.filter((c) => c.ativa || c.id === atual).map((c) => [c.id, c.nome]), atual, "—");
+function opcoesContas(atual, vazio = "—") {
+  return opcoes(fin.contas.filter((c) => c.ativa || c.id === atual).map((c) => [c.id, c.nome]), atual, vazio);
 }
 
 function opcoesCategorias(natureza, atual) {
@@ -103,15 +141,31 @@ async function lerTudo(montar) {
   }
 }
 
+// grava (insere ou altera) um lançamento e devolve o registro salvo, ou lança o erro
+async function gravarLancamento(id, dados) {
+  const q = id ? sb.from("fin_lancamentos").update(dados).eq("id", id) : sb.from("fin_lancamentos").insert(dados);
+  const { data, error } = await q.select().single();
+  if (error) throw new Error(mensagemErro(error));
+  guardar(fin.lancamentos, data);
+  return data;
+}
+
+async function apagarLancamento(id) {
+  const { error } = await sb.from("fin_lancamentos").delete().eq("id", id);
+  if (error) throw new Error(mensagemErro(error));
+  fin.lancamentos = fin.lancamentos.filter((x) => x.id !== id && x.origem_id !== id);
+}
+
 // ------------------------------------------------------------- carga e rotas
 
 async function carregarFinanceiro() {
-  const [contas, categorias, lancamentos, contratos, alvaras] = await Promise.all([
+  const [contas, categorias, lancamentos, contratos, alvaras, config] = await Promise.all([
     sb.from("fin_contas").select("*").order("ordem").order("nome"),
     sb.from("fin_categorias").select("*").order("ordem").order("nome"),
     lerTudo(() => sb.from("fin_lancamentos").select("*").order("vencimento").order("id")),
     lerTudo(() => sb.from("fin_contratos").select("*").order("criado_em").order("id")),
-    lerTudo(() => sb.from("fin_alvaras").select("*").order("data_levantamento").order("id")),
+    lerTudo(() => sb.from("fin_alvaras").select("*").order("criado_em").order("id")),
+    sb.from("fin_config").select("*").maybeSingle(),
   ]);
   const falha = [contas, categorias, lancamentos, contratos, alvaras].find((r) => r.error);
   if (falha) {
@@ -120,11 +174,13 @@ async function carregarFinanceiro() {
   }
   Object.assign(fin, {
     contas: contas.data, categorias: categorias.data, lancamentos: lancamentos.data,
-    contratos: contratos.data, alvaras: alvaras.data, carregado: true,
+    contratos: contratos.data, alvaras: alvaras.data, config: config.data || { percentual_imposto: 11, reserva_desde: hoje() },
+    carregado: true,
   });
   preencherClientesFin();
   renderizarFinanceiro();
   if (at.carregado) renderizarAtendimentos();
+  if (pode("financeiro", 2)) estenderMensais().then((n) => { if (n) renderizarFinanceiro(); });
 }
 
 function preencherClientesFin() {
@@ -136,7 +192,8 @@ function rotearFinanceiro() {
   const [p1, p2, p3] = location.hash.replace(/^#/, "").split("/").slice(1);
   if (SUBS_FIN[p1]) fin.sub = p1;
   if (fin.sub === "config" && !pode("financeiro", 3)) fin.sub = "geral";
-  if (p1 === "contrato" || p1 === "alvara") fin.sub = p1 === "contrato" ? "honorarios" : "alvaras";
+  if (p1 === "contrato") fin.sub = "honorarios";
+  if (p1 === "alvara") fin.sub = "alvaras";
   renderizarFinanceiro();
   if (p1 === "lancamento") {
     const l = fin.lancamentos.find((x) => x.id === p2);
@@ -151,7 +208,7 @@ function rotearFinanceiro() {
     }
   } else if (p1 === "alvara") {
     const a = fin.alvaras.find((x) => x.id === p2);
-    if (a) abrirAlvara(a); else naoEncontrado();
+    if (a) abrirRecebimento(a); else naoEncontrado();
   }
 }
 
@@ -166,21 +223,24 @@ function renderizarFinanceiro() {
   if (!fin.carregado) return;
   const mes = fin.mes || hoje().slice(0, 7);
   const anterior = somarMeses(`${mes}-01`, -1).slice(0, 7);
-  const pagosNo = (m) => fin.lancamentos.filter((l) => l.pago_em?.startsWith(m));
+  const pagosNo = (m) => fin.lancamentos.filter((l) => l.pago_em?.startsWith(m) && l.natureza !== "transferencia");
   const doMes = pagosNo(mes);
   const receitas = doMes.filter((l) => l.natureza === "receita");
   const despesas = doMes.filter((l) => l.natureza === "despesa");
-  const resultado = soma(receitas) - soma(despesas);
+  const entradas = soma(receitas, valorResultado), saidas = soma(despesas, valorResultado);
+  const resultado = centavos(entradas - saidas);
   const doAnterior = pagosNo(anterior);
-  const resultadoAnterior = soma(doAnterior.filter((l) => l.natureza === "receita")) - soma(doAnterior.filter((l) => l.natureza === "despesa"));
+  const resultadoAnterior = soma(doAnterior.filter((l) => l.natureza === "receita"), valorResultado) -
+    soma(doAnterior.filter((l) => l.natureza === "despesa"), valorResultado);
+  const foraEntradas = centavos(soma(receitas) - entradas), foraSaidas = centavos(soma(despesas) - saidas);
   const aReceber = fin.lancamentos.filter((l) => l.natureza === "receita" && !l.pago_em);
   const atrasadas = aReceber.filter(emAtraso);
 
   $("fin-mes").textContent = nomeMes(mes);
-  $("fin-n-entradas").textContent = moedaCurta(soma(receitas));
-  $("fin-r-entradas").textContent = `${receitas.length} lançamento(s)`;
-  $("fin-n-saidas").textContent = moedaCurta(soma(despesas));
-  $("fin-r-saidas").textContent = `${despesas.length} lançamento(s)`;
+  $("fin-n-entradas").textContent = moedaCurta(entradas);
+  $("fin-r-entradas").textContent = foraEntradas ? `+ ${moedaCurta(foraEntradas)} só de caixa` : `${receitas.length} lançamento(s)`;
+  $("fin-n-saidas").textContent = moedaCurta(saidas);
+  $("fin-r-saidas").textContent = foraSaidas ? `+ ${moedaCurta(foraSaidas)} só de caixa` : `${despesas.length} lançamento(s)`;
   $("fin-n-resultado").textContent = moedaCurta(resultado);
   $("fin-n-resultado").className = `n ${resultado > 0 ? "pos" : resultado < 0 ? "neg" : ""}`;
   $("fin-r-resultado").textContent = doAnterior.length ? `${nomeMes(anterior).split(" ")[0]}: ${moedaCurta(resultadoAnterior)}` : "";
@@ -188,7 +248,7 @@ function renderizarFinanceiro() {
   $("fin-r-receber").innerHTML = atrasadas.length
     ? `<span class="atrasado">${moedaCurta(soma(atrasadas))} em atraso</span>` : `${aReceber.length} em aberto`;
 
-  $("fin-novo-receita").hidden = $("fin-novo-despesa").hidden = !pode("financeiro", 2);
+  for (const id of ["fin-novo-receita", "fin-novo-despesa", "fin-nova-transferencia"]) $(id).hidden = !pode("financeiro", 2);
   document.querySelectorAll("[data-fin-sub]").forEach((b) => {
     b.setAttribute("aria-pressed", b.dataset.finSub === fin.sub);
     if (b.dataset.finSub === "config") b.hidden = !pode("financeiro", 3);
@@ -196,46 +256,75 @@ function renderizarFinanceiro() {
 
   const telas = {
     geral: telaGeral, lancamentos: telaLancamentos, receber: () => telaPendentes("receita"),
-    pagar: () => telaPendentes("despesa"), honorarios: telaHonorarios, alvaras: telaAlvaras, config: telaConfig,
+    pagar: () => telaPendentes("despesa"), honorarios: telaHonorarios, alvaras: telaRecebimentos, config: telaConfig,
   };
   $("fin-conteudo").innerHTML = telas[fin.sub](mes, doMes);
   if (fin.sub === "lancamentos") renderizarTabelaLancamentos();
 }
 
+function classeValor(l) { return l.natureza === "receita" ? "rec" : l.natureza === "despesa" ? "desp" : "transf"; }
+
+function botaoEditar(l) {
+  return `<a class="botao-sec mini editar" href="#financeiro/lancamento/${esc(l.id)}" title="Abrir e editar">✎ Editar</a>`;
+}
+
+function botaoPagar(l, curto = false) {
+  if (!pode("financeiro", 2) || l.pago_em) return "";
+  const verbo = l.natureza === "receita" ? "Marcar recebida" : l.natureza === "despesa" ? "Marcar paga" : "Marcar realizada";
+  return `<button class="botao-sec mini" data-pagar="${esc(l.id)}" title="${verbo}">${curto ? "✓" : verbo}</button>`;
+}
+
+function subLancamento(l) {
+  const partes = l.natureza === "transferencia"
+    ? [`${nomeConta(l.conta_id)} → ${nomeConta(l.conta_destino_id)}`]
+    : [nomeCategoria(l.categoria_id), l.cliente_nome, l.processo && `Proc. ${l.processo}`];
+  if (l.compromisso_id) partes.push("📅 na agenda");
+  return partes.filter(Boolean).map(esc).join(" · ");
+}
+
 function itemVencimento(l) {
-  const sub = [nomeCategoria(l.categoria_id), l.cliente_nome, l.processo && `Proc. ${l.processo}`].filter(Boolean).map(esc).join(" · ");
   return `
   <div class="venc">
     <a class="venc-link" href="#financeiro/lancamento/${esc(l.id)}">
       <span class="d">${dataBR(l.vencimento).slice(0, 5)}</span>
-      <span class="t"><b>${esc(l.descricao)}</b><span>${sub}</span></span>
+      <span class="t"><b>${esc(l.descricao)}</b><span>${subLancamento(l)}</span></span>
     </a>
     ${emAtraso(l) ? '<span class="selo-at atrasado">em atraso</span>' : ""}
-    <span class="valor ${l.natureza === "receita" ? "rec" : "desp"}">${moeda(l.valor)}</span>
-    ${pode("financeiro", 2) ? `<button class="botao-sec mini" data-pagar="${esc(l.id)}" title="${l.natureza === "receita" ? "Marcar como recebida" : "Marcar como paga"}">✓</button>` : ""}
+    <span class="valor ${classeValor(l)}">${moeda(l.valor)}</span>
+    ${botaoPagar(l, true)}
   </div>`;
+}
+
+function saldosDasContas() {
+  return fin.contas.map((c) => {
+    const pagos = fin.lancamentos.filter((l) => l.pago_em);
+    const saldo = Number(c.saldo_inicial)
+      + soma(pagos.filter((l) => l.natureza === "receita" && l.conta_id === c.id))
+      - soma(pagos.filter((l) => l.natureza === "despesa" && l.conta_id === c.id))
+      - soma(pagos.filter((l) => l.natureza === "transferencia" && l.conta_id === c.id))
+      + soma(pagos.filter((l) => l.natureza === "transferencia" && l.conta_destino_id === c.id));
+    return { c, saldo: centavos(saldo) };
+  }).filter((x) => x.c.ativa || Math.abs(x.saldo) > 0.004);
 }
 
 function telaGeral(mes, doMes) {
   const limite = somarDias(hoje(), 30);
   const proximos = fin.lancamentos.filter((l) => !l.pago_em && l.vencimento <= limite)
-    .sort((a, b) => a.vencimento.localeCompare(b.vencimento)).slice(0, 15);
+    .sort((a, b) => a.vencimento.localeCompare(b.vencimento)).slice(0, 20);
 
   const porCategoria = new Map();
   for (const l of doMes) {
+    const v = valorResultado(l);
+    if (!v) continue;
     const chave = `${l.natureza}|${l.categoria_id || ""}`;
-    porCategoria.set(chave, (porCategoria.get(chave) || 0) + Number(l.valor));
+    porCategoria.set(chave, (porCategoria.get(chave) || 0) + v);
   }
   const linhas = [...porCategoria.entries()].map(([k, v]) => ({ natureza: k.split("|")[0], categoria: k.split("|")[1], v }))
     .sort((a, b) => (a.natureza === b.natureza ? b.v - a.v : a.natureza === "receita" ? -1 : 1));
   const maior = Math.max(1, ...linhas.map((x) => x.v));
-
-  const contas = fin.contas.map((c) => {
-    const pagos = fin.lancamentos.filter((l) => l.pago_em && l.conta_id === c.id);
-    const saldo = Number(c.saldo_inicial) + soma(pagos.filter((l) => l.natureza === "receita")) - soma(pagos.filter((l) => l.natureza === "despesa"));
-    return { c, saldo };
-  }).filter((x) => x.c.ativa || Math.abs(x.saldo) > 0.004);
-  const semConta = fin.lancamentos.filter((l) => l.pago_em && !l.conta_id).length;
+  const contas = saldosDasContas();
+  const semConta = fin.lancamentos.filter((l) => l.pago_em && !l.conta_id && l.natureza !== "transferencia").length;
+  const poup = contaPoupanca();
 
   return `
   <div class="fin-grade">
@@ -247,17 +336,19 @@ function telaGeral(mes, doMes) {
       <div class="bloco">
         <h3>Resultado por categoria · ${esc(nomeMes(mes).split(" ")[0])}</h3>
         ${linhas.length ? linhas.map((x) => `
-          <div class="cat"><span>${esc(nomeCategoria(x.categoria))}</span>
+          <div class="cat"><span title="${esc(nomeCategoria(x.categoria))}">${esc(nomeCategoria(x.categoria))}</span>
             <span class="trilho"><i style="width:${Math.max(2, Math.round((100 * x.v) / maior))}%" class="${x.natureza}"></i></span>
             <span class="valor ${x.natureza === "receita" ? "rec" : "desp"}">${moedaCurta(x.v)}</span></div>`).join("")
           : '<div class="vazio pequeno">Nenhum lançamento pago neste mês.</div>'}
+        <p class="at-sub">Valor total de alvarás e acordos conta só pela parte do escritório; repasses, empréstimos e poupança não entram no resultado.</p>
       </div>
       <div class="bloco">
         <h3>Saldo por conta</h3>
         ${contas.map((x) => `<div class="conta"><span>${esc(x.c.nome)}</span><span class="valor ${x.saldo < 0 ? "desp" : ""}">${moeda(x.saldo)}</span></div>`).join("")}
         <div class="conta total"><span>Total</span><span class="valor">${moeda(contas.reduce((t, x) => t + x.saldo, 0))}</span></div>
+        ${poup ? `<p class="at-sub">Reserva de imposto: ${percentualCampo(fin.config?.percentual_imposto)}% de cada recebimento vai para a ${esc(poup.nome)} e volta no dia 20 do mês seguinte.</p>` : ""}
         ${semConta ? `<p class="at-sub">${semConta} lançamento(s) pago(s) sem conta não entram nos saldos.</p>` : ""}
-        ${pode("financeiro", 3) ? '<p class="at-sub">Saldo inicial e contas em <a href="#financeiro/config">Configurações</a>.</p>' : ""}
+        ${pode("financeiro", 3) ? '<p class="at-sub">Saldo inicial, contas e percentual em <a href="#financeiro/config">Configurações</a>.</p>' : ""}
       </div>
     </div>
   </div>`;
@@ -265,17 +356,17 @@ function telaGeral(mes, doMes) {
 
 function telaLancamentos() {
   const contas = fin.contas.map((c) => [c.id, c.nome]);
-  const cats = fin.categorias.map((c) => [c.id, `${c.nome} (${c.natureza === "receita" ? "receita" : "despesa"})`]);
+  const cats = fin.categorias.map((c) => [c.id, `${c.nome} (${NATUREZAS[c.natureza].toLowerCase()})`]);
   return `
   <div class="filtros fin-filtros">
     <input class="busca" id="fl-busca" type="search" placeholder="Buscar descrição, cliente ou processo…" aria-label="Buscar lançamentos">
     <select id="fl-f-conta" aria-label="Conta">${opcoes(contas, "", "Todas as contas")}</select>
     <select id="fl-f-categoria" aria-label="Categoria">${opcoes(cats, "", "Todas as categorias")}</select>
-    <select id="fl-f-natureza" aria-label="Tipo">${opcoes([["receita", "Só receitas"], ["despesa", "Só despesas"]], "", "Receitas e despesas")}</select>
+    <select id="fl-f-natureza" aria-label="Tipo">${opcoes([["receita", "Só receitas"], ["despesa", "Só despesas"], ["transferencia", "Só transferências"]], "", "Todos os tipos")}</select>
   </div>
   <div class="contagem" id="fl-contagem"></div>
   <div class="bloco rol"><table class="fin"><thead><tr>
-    <th>Data</th><th>Descrição</th><th>Categoria</th><th>Conta</th><th>Situação</th><th class="num">Valor</th>
+    <th>Data</th><th>Descrição</th><th>Categoria</th><th>Conta</th><th>Situação</th><th class="num">Valor</th><th></th>
   </tr></thead><tbody id="fl-corpo"></tbody></table></div>`;
 }
 
@@ -284,12 +375,17 @@ function lancamentosDoMes() {
   return fin.lancamentos.filter((l) => l.pago_em?.startsWith(mes) || (!l.pago_em && l.vencimento.startsWith(mes)));
 }
 
+function seloSituacao(l) {
+  if (l.pago_em) return `<span class="selo-at distribuida">${l.natureza === "receita" ? "recebido" : l.natureza === "despesa" ? "pago" : "realizada"}</span>`;
+  return emAtraso(l) ? '<span class="selo-at atrasado">em atraso</span>' : '<span class="selo-at">a vencer</span>';
+}
+
 function renderizarTabelaLancamentos() {
   const busca = normalizarNome($("fl-busca")?.value || "");
-  const conta = $("fl-f-conta").value, categoria = $("fl-f-categoria").value, natureza = $("fl-f-natureza").value;
+  const contaF = $("fl-f-conta").value, categoriaF = $("fl-f-categoria").value, natureza = $("fl-f-natureza").value;
   const lista = lancamentosDoMes().filter((l) => {
-    if (conta && l.conta_id !== conta) return false;
-    if (categoria && l.categoria_id !== categoria) return false;
+    if (contaF && l.conta_id !== contaF && l.conta_destino_id !== contaF) return false;
+    if (categoriaF && l.categoria_id !== categoriaF) return false;
     if (natureza && l.natureza !== natureza) return false;
     if (busca) {
       const alvo = normalizarNome([l.descricao, l.cliente_nome, l.processo, l.observacoes].join(" "));
@@ -300,49 +396,66 @@ function renderizarTabelaLancamentos() {
   const rec = soma(lista.filter((l) => l.natureza === "receita")), desp = soma(lista.filter((l) => l.natureza === "despesa"));
   $("fl-contagem").textContent = `${lista.length} lançamento(s) · receitas ${moeda(rec)} · despesas ${moeda(desp)}`;
   $("fl-corpo").innerHTML = lista.length ? lista.map((l) => {
-    const situacao = l.pago_em ? `<span class="selo-at distribuida">${l.natureza === "receita" ? "recebido" : "pago"}</span>`
-      : emAtraso(l) ? '<span class="selo-at atrasado">em atraso</span>' : '<span class="selo-at">a vencer</span>';
     const sub = [l.cliente_nome, l.processo && `Proc. ${l.processo}`, l.reembolsavel && "reembolsável"].filter(Boolean).map(esc).join(" · ");
+    const contaTxt = l.natureza === "transferencia" ? `${nomeConta(l.conta_id)} → ${nomeConta(l.conta_destino_id)}` : nomeConta(l.conta_id);
+    const sinal = l.natureza === "despesa" ? "− " : "";
     return `<tr class="clicavel" data-ir="#financeiro/lancamento/${esc(l.id)}">
       <td>${dataBR(l.pago_em || l.vencimento).slice(0, 5)}</td>
       <td><a href="#financeiro/lancamento/${esc(l.id)}">${esc(l.descricao)}</a>${sub ? `<span class="at-sub" style="display:block">${sub}</span>` : ""}</td>
-      <td>${esc(nomeCategoria(l.categoria_id))}</td><td>${esc(nomeConta(l.conta_id))}</td><td>${situacao}</td>
-      <td class="num valor ${l.natureza === "receita" ? "rec" : "desp"}">${l.natureza === "despesa" ? "− " : ""}${moeda(l.valor)}</td></tr>`;
-  }).join("") : '<tr><td colspan="6"><div class="vazio pequeno">Nenhum lançamento neste mês com esses filtros.</div></td></tr>';
+      <td>${esc(nomeCategoria(l.categoria_id))}</td><td>${esc(contaTxt)}</td><td>${seloSituacao(l)}</td>
+      <td class="num valor ${classeValor(l)}">${sinal}${moeda(l.valor)}</td>
+      <td>${botaoEditar(l)}</td></tr>`;
+  }).join("") : '<tr><td colspan="7"><div class="vazio pequeno">Nenhum lançamento neste mês com esses filtros.</div></td></tr>';
+}
+
+function itemPendente(l) {
+  return `
+  <div class="at-item ${emAtraso(l) ? "fin-atrasado" : ""}">
+    <a class="at-link" href="#financeiro/lancamento/${esc(l.id)}">
+      <span class="at-data">${dataBR(l.vencimento)}</span>
+      <span class="at-info"><span class="at-titulo">${esc(l.descricao)}</span><span class="at-sub">${subLancamento(l)}</span></span>
+    </a>
+    <span class="at-acoes"><span class="valor ${classeValor(l)}">${moeda(l.valor)}</span>
+      <span class="acoes-linha">${botaoEditar(l)}${botaoPagar(l)}</span></span>
+  </div>`;
 }
 
 function telaPendentes(natureza) {
   const lista = fin.lancamentos.filter((l) => l.natureza === natureza && !l.pago_em)
     .sort((a, b) => a.vencimento.localeCompare(b.vencimento));
   const fimMes = somarMeses(`${hoje().slice(0, 7)}-01`, 1);
+  const repasse = (l) => !!registroDoRepasse(l);
   const grupos = [
     ["Em atraso", lista.filter(emAtraso)],
-    ["Até o fim deste mês", lista.filter((l) => !emAtraso(l) && l.vencimento < fimMes)],
-    ["Próximos meses", lista.filter((l) => l.vencimento >= fimMes)],
-  ].filter(([, g]) => g.length);
-  const verbo = natureza === "receita" ? "Marcar recebida" : "Marcar paga";
+    ["Até o fim deste mês", lista.filter((l) => !emAtraso(l) && l.vencimento < fimMes && !repasse(l))],
+    ["Repasses a clientes", natureza === "despesa" ? lista.filter((l) => !emAtraso(l) && repasse(l)) : []],
+    ["Próximos meses", lista.filter((l) => !emAtraso(l) && l.vencimento >= fimMes && !repasse(l))],
+  ];
+  // resgates da poupança (dinheiro que volta para a conta do escritório) aparecem em "A receber"
+  if (natureza === "receita") {
+    grupos.push(["Resgates programados da poupança", fin.lancamentos
+      .filter((l) => l.natureza === "transferencia" && !l.pago_em && l.conta_id === contaPoupanca()?.id)
+      .sort((a, b) => a.vencimento.localeCompare(b.vencimento))]);
+  }
+  const visiveis = grupos.filter(([, g]) => g.length);
   return `
   <p class="contagem">${lista.length} em aberto · total ${moeda(soma(lista))}</p>
-  ${grupos.length ? grupos.map(([titulo, g]) => `
+  ${visiveis.length ? visiveis.map(([titulo, g]) => `
     <h3 class="fin-grupo">${titulo} · ${moeda(soma(g))}</h3>
-    <div class="lista">${g.map((l) => `
-      <div class="at-item ${emAtraso(l) ? "fin-atrasado" : ""}">
-        <a class="at-link" href="#financeiro/lancamento/${esc(l.id)}">
-          <span class="at-data">${dataBR(l.vencimento)}</span>
-          <span class="at-info"><span class="at-titulo">${esc(l.descricao)}</span>
-            <span class="at-sub">${[nomeCategoria(l.categoria_id), l.cliente_nome, l.processo && `Proc. ${l.processo}`, l.compromisso_id && "📅 na agenda"].filter(Boolean).map(esc).join(" · ")}</span></span>
-        </a>
-        <span class="at-acoes"><span class="valor ${natureza === "receita" ? "rec" : "desp"}">${moeda(l.valor)}</span>
-          ${pode("financeiro", 2) ? `<button class="botao-sec" data-pagar="${esc(l.id)}">${verbo}</button>` : ""}</span>
-      </div>`).join("")}</div>`).join("")
+    <div class="lista">${g.map(itemPendente).join("")}</div>`).join("")
     : `<div class="vazio">Nada ${natureza === "receita" ? "a receber" : "a pagar"} em aberto.</div>`}`;
 }
 
 function resumoContrato(c) {
-  const lancs = fin.lancamentos.filter((l) => l.contrato_id === c.id);
+  const lancs = fin.lancamentos.filter((l) => l.contrato_id === c.id && l.natureza === "receita");
   const parcelas = lancs.filter((l) => l.parcela);
   const pagas = parcelas.filter((l) => l.pago_em);
-  return { lancs, parcelas, pagas, recebido: soma(lancs.filter((l) => l.pago_em)) };
+  return { lancs, parcelas, pagas, recebido: soma(lancs.filter((l) => l.pago_em), valorDoContrato) };
+}
+
+function textoContratado(c) {
+  if (c.tipo === "mensal") return `${moeda(c.valor_fixo)} por mês`;
+  return [c.valor_fixo && moeda(c.valor_fixo), c.percentual_exito != null && `${percentualCampo(c.percentual_exito)}% de êxito`].filter(Boolean).join(" + ") || "—";
 }
 
 function telaHonorarios() {
@@ -351,42 +464,51 @@ function telaHonorarios() {
   return `
   <div class="barra-fin">${pode("financeiro", 2) ? '<button class="botao" data-novo-contrato>+ Contrato de honorários</button>' : ""}</div>
   ${lista.length ? `<div class="bloco rol"><table class="fin"><thead><tr>
-    <th>Cliente</th><th>Tipo</th><th>Contratado</th><th class="num">Recebido</th><th>Parcelas</th><th>Situação</th><th>Origem</th>
+    <th>Cliente</th><th>Tipo</th><th>Contratado</th><th class="num">Recebido</th><th>Parcelas</th><th>Situação</th><th>Origem</th><th></th>
   </tr></thead><tbody>${lista.map((c) => {
     const r = resumoContrato(c);
-    const contratado = [c.valor_fixo && moeda(c.valor_fixo), c.percentual_exito != null && `${String(c.percentual_exito).replace(".", ",")}% de êxito`].filter(Boolean).join(" + ");
     const pct = r.parcelas.length ? Math.round((100 * r.pagas.length) / r.parcelas.length) : 0;
     const atend = c.atendimento_id && at.lista.find((a) => a.id === c.atendimento_id);
+    const parcelas = c.tipo === "mensal" ? `${r.pagas.length} paga(s)` : r.parcelas.length
+      ? `<span class="prog"><i style="width:${pct}%"></i></span> ${r.pagas.length}/${r.parcelas.length}` : "—";
     return `<tr class="clicavel" data-ir="#financeiro/contrato/${esc(c.id)}">
       <td><a href="#financeiro/contrato/${esc(c.id)}">${esc(c.cliente_nome)}</a></td>
-      <td>${TIPOS_CONTRATO[c.tipo]}</td><td>${esc(contratado || "—")}</td>
+      <td>${TIPOS_CONTRATO[c.tipo]}</td><td>${esc(textoContratado(c))}</td>
       <td class="num valor rec">${r.recebido ? moeda(r.recebido) : "—"}</td>
-      <td>${r.parcelas.length ? `<span class="prog"><i style="width:${pct}%"></i></span> ${r.pagas.length}/${r.parcelas.length}` : "—"}</td>
+      <td>${parcelas}</td>
       <td><span class="selo-at ${c.situacao === "ativo" ? "distribuida" : ""}">${SITUACOES_CONTRATO[c.situacao]}</span></td>
-      <td>${atend ? `<a href="#atendimento/${esc(atend.id)}">Atendimento ${dataBR(atend.data_atendimento).slice(0, 5)}</a>` : esc(c.processo ? `Proc. ${c.processo}` : "—")}</td></tr>`;
+      <td>${atend ? `<a href="#atendimento/${esc(atend.id)}">Atendimento ${dataBR(atend.data_atendimento).slice(0, 5)}</a>` : esc(c.processo ? `Proc. ${c.processo}` : "—")}</td>
+      <td><a class="botao-sec mini editar" href="#financeiro/contrato/${esc(c.id)}">✎ Editar</a></td></tr>`;
   }).join("")}</tbody></table></div>`
     : '<div class="vazio">Nenhum contrato de honorários cadastrado. Ao fechar um contrato no Atendimento, use “💰 Cadastrar honorários”.</div>'}`;
 }
 
-function telaAlvaras() {
-  const lista = [...fin.alvaras].sort((a, b) => b.data_levantamento.localeCompare(a.data_levantamento));
-  const pendentes = lista.filter((a) => !a.repassado_em && Number(a.repasse) > 0);
+function telaRecebimentos() {
+  const lista = [...fin.alvaras].sort((a, b) => (b.data_levantamento || b.vencimento || "").localeCompare(a.data_levantamento || a.vencimento || ""));
+  const pendentes = lista.filter((a) => a.data_levantamento && !a.repassado_em && Number(a.repasse) > 0);
   return `
   <div class="barra-fin">
-    ${pendentes.length ? `<span class="atrasado">${pendentes.length} repasse(s) pendente(s) · ${moeda(soma(pendentes.map((a) => ({ valor: a.repasse }))))}</span>` : ""}
-    ${pode("financeiro", 2) ? '<button class="botao" data-novo-alvara>+ Alvará</button>' : ""}
+    ${pendentes.length ? `<span class="atrasado">${pendentes.length} repasse(s) pendente(s) · ${moeda(soma(pendentes, (a) => a.repasse))}</span>` : ""}
+    ${pode("financeiro", 2) ? '<button class="botao-sec" data-novo-recebimento="acordo">+ Acordo</button><button class="botao" data-novo-recebimento="alvara">+ Alvará</button>' : ""}
   </div>
+  <p class="at-sub">Valores pagos pela parte contrária ou levantados em juízo em que parte é do cliente. O valor total entra no caixa; só a parte do escritório entra no resultado; o repasse vira uma conta a pagar.</p>
   ${lista.length ? `<div class="bloco rol"><table class="fin"><thead><tr>
-    <th>Data</th><th>Cliente / processo</th><th class="num">Levantado</th><th class="num">Honorários</th><th class="num">Descontos</th><th class="num">Repasse</th><th>Situação</th>
-  </tr></thead><tbody>${lista.map((a) => `
+    <th>Data</th><th>Origem</th><th>Cliente / processo</th><th class="num">Valor total</th><th class="num">Escritório</th><th class="num">Repasse</th><th>Situação</th><th></th>
+  </tr></thead><tbody>${lista.map((a) => {
+    const situacao = !a.data_levantamento ? (a.vencimento < hoje() ? '<span class="selo-at atrasado">não recebido</span>' : '<span class="selo-at">a receber</span>')
+      : a.repassado_em ? `<span class="selo-at distribuida">repassado ${dataBR(a.repassado_em).slice(0, 5)}</span>`
+        : Number(a.repasse) > 0 ? '<span class="selo-at aguardando_distribuicao">repasse pendente</span>' : '<span class="selo-at distribuida">recebido</span>';
+    return `
     <tr class="clicavel" data-ir="#financeiro/alvara/${esc(a.id)}">
-      <td>${dataBR(a.data_levantamento)}</td>
+      <td>${dataBR(a.data_levantamento || a.vencimento)}</td>
+      <td>${ORIGENS[a.origem]}${a.total_parcelas > 1 ? ` ${a.parcela}/${a.total_parcelas}` : ""}</td>
       <td><a href="#financeiro/alvara/${esc(a.id)}">${esc(a.cliente_nome)}</a>${a.processo ? `<span class="at-sub" style="display:block">${esc(a.processo)}</span>` : ""}</td>
-      <td class="num valor">${moeda(a.valor_levantado)}</td><td class="num valor rec">${moeda(a.honorarios)}</td>
-      <td class="num valor">${Number(a.descontos) ? moeda(a.descontos) : "—"}</td><td class="num valor">${moeda(a.repasse)}</td>
-      <td>${a.repassado_em ? `<span class="selo-at distribuida">repassado ${dataBR(a.repassado_em).slice(0, 5)}</span>`
-        : Number(a.repasse) > 0 ? '<span class="selo-at aguardando_distribuicao">repasse pendente</span>' : "—"}</td></tr>`).join("")}
-  </tbody></table></div>` : '<div class="vazio">Nenhum alvará registrado.</div>'}`;
+      <td class="num valor">${moeda(a.valor_levantado)}</td>
+      <td class="num valor rec">${moeda(Number(a.honorarios) + Number(a.descontos))}</td>
+      <td class="num valor">${moeda(a.repasse)}</td><td>${situacao}</td>
+      <td><a class="botao-sec mini editar" href="#financeiro/alvara/${esc(a.id)}">✎ Editar</a></td></tr>`;
+  }).join("")}
+  </tbody></table></div>` : '<div class="vazio">Nenhum alvará ou acordo registrado.</div>'}`;
 }
 
 function telaConfig() {
@@ -400,9 +522,11 @@ function telaConfig() {
   const linhaCategoria = (c) => `
     <tr data-categoria="${esc(c.id)}">
       <td><input class="cfg-nome" value="${esc(c.nome)}" maxlength="80" aria-label="Nome da categoria"></td>
+      ${c.natureza === "transferencia" ? "<td></td>" : `<td><label class="check" title="Desmarque para valores que só passam pelo caixa (parte do cliente, empréstimos)"><input type="checkbox" class="cfg-resultado" ${c.resultado !== false ? "checked" : ""}> entra no resultado</label></td>`}
       <td><label class="check"><input type="checkbox" class="cfg-ativa" ${c.ativa ? "checked" : ""}> ativa</label></td>
       <td><button class="botao-sec mini" data-salvar-categoria="${esc(c.id)}">Salvar</button></td></tr>`;
   const cats = (n) => fin.categorias.filter((c) => c.natureza === n);
+  const titulos = { receita: "Categorias de receita", despesa: "Categorias de despesa", transferencia: "Tipos de transferência" };
   return `
   <div class="bloco rol">
     <h3>Contas</h3>
@@ -411,13 +535,28 @@ function telaConfig() {
     <tbody>${fin.contas.map(linhaConta).join("")}</tbody></table>
     <button class="botao-sec" data-nova-conta>+ Conta</button>
   </div>
+  <div class="bloco">
+    <h3>Reserva de imposto</h3>
+    <p class="at-sub">A cada recebimento (só a parte do escritório), o sistema transfere este percentual para a conta poupança e programa o resgate para o dia 20 do mês seguinte.</p>
+    <div class="cfg-linha">
+      <label>Percentual (%)<input id="cfg-imposto" inputmode="decimal" value="${esc(percentualCampo(fin.config?.percentual_imposto))}"></label>
+      <label>Valer para recebimentos a partir de<input type="date" id="cfg-desde" value="${esc(fin.config?.reserva_desde || "")}"></label>
+      <button class="botao-sec" data-salvar-reserva>Salvar</button>
+    </div>
+    ${contaPoupanca() ? "" : '<p class="atrasado">Cadastre uma conta do tipo “Poupança” para a reserva funcionar.</p>'}
+  </div>
   <div class="fin-grade metade">
     ${["receita", "despesa"].map((n) => `
     <div class="bloco rol">
-      <h3>Categorias de ${n}</h3>
+      <h3>${titulos[n]}</h3>
       <table class="fin cfg"><tbody>${cats(n).map(linhaCategoria).join("")}</tbody></table>
       <button class="botao-sec" data-nova-categoria="${n}">+ Categoria</button>
     </div>`).join("")}
+  </div>
+  <div class="bloco rol">
+    <h3>${titulos.transferencia}</h3>
+    <table class="fin cfg"><tbody>${cats("transferencia").map(linhaCategoria).join("")}</tbody></table>
+    <button class="botao-sec" data-nova-categoria="transferencia">+ Tipo de transferência</button>
   </div>`;
 }
 
@@ -432,6 +571,7 @@ function abrirDialogo({ titulo, corpo, ok = "Salvar", salvar, excluir, somenteLe
   $("dfin-ok").hidden = somenteLeitura || !salvar;
   $("dfin-excluir").hidden = !excluir;
   if (!$("dlg-fin").open) $("dlg-fin").showModal();
+  $("dfin-campos").scrollTop = 0;
 }
 
 function fecharDialogo() {
@@ -451,7 +591,71 @@ function rodapeAutoria(r) {
     (r.atualizado_por ? ` · última alteração: ${esc(nomePessoa(r.atualizado_por))} em ${new Date(r.atualizado_em).toLocaleString("pt-BR")}` : "") + "</div>";
 }
 
-// ------------------------------------------------------------- lançamentos
+async function executar(acao, sucesso) {
+  $("dfin-ok").disabled = true;
+  try {
+    const aviso = await acao();
+    fecharDialogo();
+    renderizarFinanceiro();
+    if (at.carregado) renderizarAtendimentos();
+    avisar(aviso ? `${sucesso} Atenção — ${aviso}` : sucesso, aviso ? 6000 : 2500);
+  } catch (e) {
+    avisar(e.message || "Não foi possível salvar.", 5000);
+  } finally {
+    $("dfin-ok").disabled = false;
+  }
+}
+
+// ------------------------------------------------------------- reserva de imposto
+
+// cria, ajusta ou remove a transferência para a poupança ligada a uma receita; depois acerta os resgates
+async function atualizarReserva(l, removida = false) {
+  const poup = contaPoupanca();
+  if (!poup) return null;
+  const existente = fin.lancamentos.find((x) => x.origem_id === l.id);
+  const pct = Number(fin.config?.percentual_imposto ?? 11);
+  const valor = removida ? 0 : centavos((baseImposto(l) * pct) / 100);
+  const meses = new Set(existente?.pago_em ? [existente.pago_em.slice(0, 7)] : []);
+  const origemConta = l.conta_id && l.conta_id !== poup.id ? l.conta_id : contaPadrao();
+  if (valor > 0 && origemConta) {
+    const dados = {
+      natureza: "transferencia", descricao: `Reserva de imposto (${percentualCampo(pct)}%) — ${l.descricao}`,
+      valor, vencimento: l.pago_em, pago_em: l.pago_em, conta_id: origemConta, conta_destino_id: poup.id,
+      categoria_id: categoriaPorNome("Aplicação na poupança", "transferencia")?.id || null,
+      origem_id: l.id, cliente_nome: l.cliente_nome, processo: l.processo,
+    };
+    await gravarLancamento(existente?.id, dados);
+    meses.add(l.pago_em.slice(0, 7));
+  } else if (existente) {
+    if (!removida) await apagarLancamento(existente.id);
+    else fin.lancamentos = fin.lancamentos.filter((x) => x.id !== existente.id);
+  }
+  for (const m of meses) await atualizarResgate(m);
+  return null;
+}
+
+// um resgate por mês de competência, no dia 20 do mês seguinte, com a soma das reservas do mês
+async function atualizarResgate(mes) {
+  const poup = contaPoupanca();
+  if (!poup) return;
+  const referencia = `resgate-imposto-${mes}`;
+  const existente = fin.lancamentos.find((x) => x.referencia === referencia);
+  if (existente?.pago_em) return; // já resgatado: não mexe
+  const total = soma(fin.lancamentos.filter((x) => x.origem_id && x.natureza === "transferencia" &&
+    x.conta_destino_id === poup.id && x.pago_em?.startsWith(mes)));
+  if (total > 0) {
+    await gravarLancamento(existente?.id, {
+      natureza: "transferencia", descricao: `Resgate para imposto — competência ${mesBR(mes)}`,
+      valor: total, vencimento: `${somarMeses(`${mes}-01`, 1).slice(0, 7)}-20`, pago_em: null,
+      conta_id: poup.id, conta_destino_id: existente?.conta_destino_id || contaPadrao(),
+      categoria_id: categoriaPorNome("Resgate de poupança", "transferencia")?.id || null, referencia,
+    });
+  } else if (existente) {
+    await apagarLancamento(existente.id);
+  }
+}
+
+// ------------------------------------------------------------- lançamentos (receitas e despesas)
 
 function compromissoAtivo(l) {
   if (!l?.compromisso_id) return false;
@@ -460,29 +664,33 @@ function compromissoAtivo(l) {
 }
 
 function abrirLancamento(l, base = {}) {
+  if ((l?.natureza || base.natureza) === "transferencia") return abrirTransferencia(l, base);
   const novo = !l?.id;
   const d = novo ? { natureza: "receita", vencimento: hoje(), conta_id: contaPadrao(), ...base } : l;
   const contrato = d.contrato_id && fin.contratos.find((c) => c.id === d.contrato_id);
-  const alvara = !novo && fin.alvaras.find((a) => a.lancamento_id === d.id);
+  const reg = !novo && registroDe(d);
+  const reserva = !novo && fin.lancamentos.find((x) => x.origem_id === d.id);
   const vinculos = [
     contrato && `Contrato de honorários de <a href="#financeiro/contrato/${esc(contrato.id)}">${esc(contrato.cliente_nome)}</a>`,
     d.parcela && `parcela ${d.parcela}/${d.total_parcelas}`,
-    alvara && `gerado pelo <a href="#financeiro/alvara/${esc(alvara.id)}">alvará de ${dataBR(alvara.data_levantamento)}</a> (altere por lá)`,
+    reg && `faz parte do <a href="#financeiro/alvara/${esc(reg.id)}">${ORIGENS[reg.origem].toLowerCase()} de ${esc(reg.cliente_nome)}</a> — altere valores por lá`,
+    reserva && `reserva de imposto: <a href="#financeiro/lancamento/${esc(reserva.id)}">${moeda(reserva.valor)} para a poupança</a>`,
   ].filter(Boolean);
+  const receita = d.natureza === "receita";
   abrirDialogo({
-    titulo: novo ? `Nova ${d.natureza === "receita" ? "receita" : "despesa"}` : `${d.natureza === "receita" ? "Receita" : "Despesa"}`,
-    somenteLeitura: !pode("financeiro", 2) || !!alvara,
-    excluir: !novo && pode("financeiro", 3) && !alvara ? () => excluirLancamento(d) : null,
+    titulo: novo ? `Nova ${receita ? "receita" : "despesa"}` : `Editar ${receita ? "receita" : "despesa"}`,
+    somenteLeitura: !pode("financeiro", 2) || !!reg,
+    excluir: !novo && !reg && (pode("financeiro", 3) || (pode("financeiro", 2) && !d.pago_em)) ? () => excluirLancamento(d) : null,
     salvar: () => salvarLancamento(l, d),
     corpo: `
-      ${novo ? escolhas("fl-natureza", [["receita", "Receita"], ["despesa", "Despesa"]], d.natureza) : ""}
-      <label>Descrição<input id="fl-descricao" required maxlength="200" value="${esc(d.descricao || "")}" placeholder="Ex.: Parcela de honorários — Cliente, Aluguel de novembro"></label>
+      ${escolhas("fl-natureza", [["receita", "Receita"], ["despesa", "Despesa"]], d.natureza)}
+      <label>Descrição<input id="fl-descricao" required maxlength="200" value="${esc(d.descricao || "")}" placeholder="Ex.: Consulta — Cliente, Aluguel de novembro"></label>
       <div class="linha3">
         <label>Valor (R$)<input id="fl-valor" inputmode="decimal" required value="${esc(valorCampo(d.valor))}" placeholder="0,00"></label>
         <label>Vencimento<input type="date" id="fl-vencimento" required value="${esc(d.vencimento || "")}"></label>
-        <label><span id="fl-pago-rotulo">${d.natureza === "receita" ? "Recebido em" : "Pago em"}</span><input type="date" id="fl-pago" value="${esc(d.pago_em || "")}"></label>
+        <label><span id="fl-pago-rotulo">${receita ? "Recebido em" : "Pago em"}</span><input type="date" id="fl-pago" value="${esc(d.pago_em || "")}"></label>
       </div>
-      <p class="at-sub">Deixe “${d.natureza === "receita" ? "recebido" : "pago"} em” vazio para lançar como ${d.natureza === "receita" ? "a receber" : "a pagar"}.</p>
+      <p class="at-sub">Deixe “${receita ? "recebido" : "pago"} em” vazio para ficar ${receita ? "a receber" : "a pagar"}. Para desfazer um ${receita ? "recebimento" : "pagamento"}, apague a data.</p>
       <div class="linha2">
         <label>Categoria<select id="fl-categoria">${opcoesCategorias(d.natureza, d.categoria_id)}</select></label>
         <label>Conta<select id="fl-conta">${opcoesContas(d.conta_id)}</select></label>
@@ -495,7 +703,7 @@ function abrirLancamento(l, base = {}) {
         <label>Repetir<select id="fl-repetir">${opcoes([["", "Não repete"], ["parcelar", "Parcelar (divide o valor)"], ["mensal", "Todo mês (mesmo valor)"]], "")}</select></label>
         <label>Quantas vezes<input type="number" id="fl-vezes" min="2" max="120" value="2" disabled></label>
       </div>` : ""}
-      <label class="check" id="fl-reembolsavel-l" ${d.natureza === "receita" ? "hidden" : ""}><input type="checkbox" id="fl-reembolsavel" ${d.reembolsavel ? "checked" : ""}> Despesa reembolsável pelo cliente (custas, cópias, diligências)</label>
+      <label class="check" id="fl-reembolsavel-l" ${receita ? "hidden" : ""}><input type="checkbox" id="fl-reembolsavel" ${d.reembolsavel ? "checked" : ""}> Despesa reembolsável pelo cliente (custas, cópias, diligências)</label>
       <label class="check"><input type="checkbox" id="fl-agenda" ${compromissoAtivo(d) ? "checked" : ""}> Lembrar do vencimento na Agenda (e no seu Google Agenda)</label>
       <label>Observações<textarea id="fl-obs" rows="2">${esc(d.observacoes || "")}</textarea></label>
       ${vinculos.length ? `<div class="vinculo">${vinculos.join(" · ")}</div>` : ""}
@@ -503,9 +711,9 @@ function abrirLancamento(l, base = {}) {
   });
 }
 
-async function salvarLancamento(l, d) {
+function salvarLancamento(l, d) {
   const novo = !l?.id;
-  const natureza = novo ? escolhido("fl-natureza") : d.natureza;
+  const natureza = escolhido("fl-natureza") || d.natureza;
   const descricao = $("fl-descricao").value.trim();
   const valor = lerValor($("fl-valor").value);
   const vencimento = $("fl-vencimento").value;
@@ -524,44 +732,39 @@ async function salvarLancamento(l, d) {
     observacoes: $("fl-obs").value.trim() || null,
   };
   const lembrar = $("fl-agenda").checked;
-  $("dfin-ok").disabled = true;
-  try {
-    if (!novo) {
-      const { data, error } = await sb.from("fin_lancamentos").update(dados).eq("id", l.id).select().single();
-      if (error) { avisar(mensagemErro(error), 4000); return; }
-      guardar(fin.lancamentos, data);
-      const aviso = await sincronizarVencimento(data, lembrar);
-      fecharDialogo();
-      avisar(aviso ? `Salvo. Atenção — ${aviso}` : "Lançamento salvo.", aviso ? 5000 : 2500);
-    } else {
-      const repetir = $("fl-repetir").value;
-      const vezes = repetir ? Math.max(2, Math.min(120, Number($("fl-vezes").value) || 2)) : 1;
-      const linhas = montarParcelas({ ...dados, contrato_id: d.contrato_id || null, atendimento_id: d.atendimento_id || null },
-        vezes, repetir === "parcelar");
+  const repetir = novo ? $("fl-repetir").value : "";
+  const vezes = repetir ? Math.max(2, Math.min(120, Number($("fl-vezes").value) || 2)) : 1;
+  return executar(async () => {
+    const linhas = novo
+      ? montarParcelas({ ...dados, contrato_id: d.contrato_id || null, atendimento_id: d.atendimento_id || null }, vezes, repetir === "parcelar")
+      : [dados];
+    const salvos = [];
+    if (novo) {
       const { data, error } = await sb.from("fin_lancamentos").insert(linhas).select();
-      if (error) { avisar(mensagemErro(error), 4000); return; }
-      data.forEach((x) => guardar(fin.lancamentos, x));
-      let aviso = null;
-      if (lembrar) for (const x of data) aviso = (await sincronizarVencimento(x, true)) || aviso;
-      fecharDialogo();
-      avisar(aviso ? `Salvo. Atenção — ${aviso}` : data.length > 1 ? `${data.length} lançamentos criados.` : "Lançamento salvo.", aviso ? 5000 : 2500);
+      if (error) throw new Error(mensagemErro(error));
+      data.forEach((x) => { guardar(fin.lancamentos, x); salvos.push(x); });
+    } else {
+      salvos.push(await gravarLancamento(l.id, dados));
     }
-  } finally {
-    $("dfin-ok").disabled = false;
-  }
-  renderizarFinanceiro();
+    let aviso = null;
+    for (const x of salvos) {
+      if (lembrar || x.compromisso_id) aviso = (await sincronizarVencimento(x, lembrar)) || aviso;
+      await atualizarReserva(x);
+    }
+    return aviso;
+  }, novo && vezes > 1 ? `${vezes} lançamentos criados.` : "Lançamento salvo.");
 }
 
 // divide em parcelas (centavos que sobram vão para a última) ou repete o mesmo valor todo mês
 function montarParcelas(base, vezes, dividir) {
   if (vezes <= 1) return [base];
   const grupo = crypto.randomUUID();
-  const centavos = Math.round(base.valor * 100);
-  const parte = dividir ? Math.floor(centavos / vezes) : centavos;
+  const total = Math.round(base.valor * 100);
+  const parte = dividir ? Math.floor(total / vezes) : total;
   return Array.from({ length: vezes }, (_, i) => ({
     ...base,
     descricao: `${base.descricao} (${i + 1}/${vezes})`,
-    valor: (dividir && i === vezes - 1 ? centavos - parte * (vezes - 1) : parte) / 100,
+    valor: (dividir && i === vezes - 1 ? total - parte * (vezes - 1) : parte) / 100,
     vencimento: somarMeses(base.vencimento, i),
     pago_em: i === 0 ? base.pago_em : null,
     parcela: i + 1, total_parcelas: vezes, grupo,
@@ -570,9 +773,11 @@ function montarParcelas(base, vezes, dividir) {
 
 // cria, atualiza ou cancela o lembrete do vencimento na agenda; devolve um aviso ou null
 async function sincronizarVencimento(l, lembrar) {
+  if (l.natureza === "transferencia") return null;
   if (!l.compromisso_id && (!lembrar || l.pago_em)) return null;
   const situacao = l.pago_em ? "cumprido" : lembrar ? "pendente" : "cancelado";
   const atual = estado.compromissos.find((c) => c.id === l.compromisso_id);
+  if (atual && atual.situacao === situacao && situacao === "cancelado") return null;
   const compromisso = {
     id: l.compromisso_id || undefined,
     tipo: "financeiro",
@@ -585,7 +790,6 @@ async function sincronizarVencimento(l, lembrar) {
       .filter(Boolean).join("\n"),
     situacao,
   };
-  if (atual && atual.situacao === situacao && situacao === "cancelado") return null;
   const corpo = { compromisso };
   if (!l.compromisso_id) corpo.responsaveis = [estado.eu];
   const { data, error } = await sb.functions.invoke("agenda", { body: corpo });
@@ -596,55 +800,115 @@ async function sincronizarVencimento(l, lembrar) {
     estado.compromissos.sort((a, b) => a.inicio.localeCompare(b.inicio));
     renderizarAgenda();
   }
-  if (!l.compromisso_id) {
-    const { data: atualizado } = await sb.from("fin_lancamentos").update({ compromisso_id: salvo.id }).eq("id", l.id).select().single();
-    if (atualizado) guardar(fin.lancamentos, atualizado);
-  }
+  if (!l.compromisso_id) await gravarLancamento(l.id, { compromisso_id: salvo.id }).catch(() => null);
   return salvo.google_erro ? `Google Agenda: ${salvo.google_erro}` : null;
 }
 
-async function excluirLancamento(l) {
+function excluirLancamento(l) {
   if (!confirm(`Excluir “${l.descricao}” (${moeda(l.valor)})? Esta ação não pode ser desfeita.`)) return;
-  if (l.compromisso_id) await sincronizarVencimento({ ...l, pago_em: null }, false);
-  const { error } = await sb.from("fin_lancamentos").delete().eq("id", l.id);
-  if (error) { avisar(mensagemErro(error), 4000); return; }
-  fin.lancamentos = fin.lancamentos.filter((x) => x.id !== l.id);
-  fecharDialogo();
-  renderizarFinanceiro();
-  avisar("Lançamento excluído.");
+  return executar(async () => {
+    if (l.compromisso_id) await sincronizarVencimento({ ...l, pago_em: null }, false);
+    const reserva = fin.lancamentos.find((x) => x.origem_id === l.id);
+    await apagarLancamento(l.id); // a reserva ligada sai junto
+    if (reserva?.pago_em) await atualizarResgate(reserva.pago_em.slice(0, 7));
+    return null;
+  }, "Lançamento excluído.");
 }
 
 function abrirPagamento(l) {
-  const receita = l.natureza === "receita";
+  const reg = registroDe(l);
+  const verbo = l.natureza === "receita" ? "recebida" : l.natureza === "despesa" ? "paga" : "realizada";
   abrirDialogo({
-    titulo: receita ? "Marcar como recebida" : "Marcar como paga",
+    titulo: `Marcar como ${verbo}`,
     ok: "Confirmar",
-    salvar: async () => {
+    salvar: () => {
       const pago_em = $("fp-data").value;
-      if (!pago_em) { avisar("Informe a data."); return; }
-      const mudancas = { pago_em, conta_id: $("fp-conta").value || null };
       const valor = lerValor($("fp-valor").value);
-      if (!(valor > 0)) { avisar("Informe o valor."); return; }
-      if (valor !== Number(l.valor)) mudancas.valor = valor;
-      $("dfin-ok").disabled = true;
-      const { data, error } = await sb.from("fin_lancamentos").update(mudancas).eq("id", l.id).select().single();
-      $("dfin-ok").disabled = false;
-      if (error) { avisar(mensagemErro(error), 4000); return; }
-      guardar(fin.lancamentos, data);
-      const aviso = data.compromisso_id ? await sincronizarVencimento(data, true) : null;
-      fecharDialogo();
-      renderizarFinanceiro();
-      avisar(aviso ? `Registrado. Atenção — ${aviso}` : receita ? "Recebimento registrado." : "Pagamento registrado.", aviso ? 5000 : 2500);
+      if (!pago_em || !(valor > 0)) { avisar("Informe a data e o valor."); return; }
+      return executar(async () => {
+        if (reg) {
+          // alvará ou acordo: o registro manda nos lançamentos ligados a ele
+          const mudanca = registroDoTotal(l)
+            ? { data_levantamento: pago_em, conta_id: $("fp-conta").value || reg.conta_id }
+            : { repassado_em: pago_em };
+          await gravarRecebimento({ ...reg, ...mudanca });
+          return null;
+        }
+        const mudancas = { pago_em };
+        if (l.natureza !== "transferencia") mudancas.conta_id = $("fp-conta").value || null;
+        if (valor !== Number(l.valor)) mudancas.valor = valor;
+        const salvo = await gravarLancamento(l.id, mudancas);
+        const aviso = salvo.compromisso_id ? await sincronizarVencimento(salvo, true) : null;
+        await atualizarReserva(salvo);
+        return aviso;
+      }, l.natureza === "receita" ? "Recebimento registrado." : l.natureza === "despesa" ? "Pagamento registrado." : "Transferência registrada.");
     },
     corpo: `
-      <p><strong>${esc(l.descricao)}</strong><br><span class="at-sub">Vencimento ${dataBR(l.vencimento)}</span></p>
+      <p><strong>${esc(l.descricao)}</strong><br><span class="at-sub">Vencimento ${dataBR(l.vencimento)}${l.natureza === "transferencia" ? ` · ${esc(nomeConta(l.conta_id))} → ${esc(nomeConta(l.conta_destino_id))}` : ""}</span></p>
       <div class="linha3">
-        <label>${receita ? "Recebido em" : "Pago em"}<input type="date" id="fp-data" value="${hoje()}"></label>
-        <label>Valor (R$)<input id="fp-valor" inputmode="decimal" value="${esc(valorCampo(l.valor))}"></label>
-        <label>Conta<select id="fp-conta">${opcoesContas(l.conta_id || contaPadrao())}</select></label>
+        <label>${l.natureza === "receita" ? "Recebido em" : l.natureza === "despesa" ? "Pago em" : "Realizada em"}<input type="date" id="fp-data" value="${hoje()}"></label>
+        <label>Valor (R$)<input id="fp-valor" inputmode="decimal" value="${esc(valorCampo(l.valor))}" ${reg ? "disabled" : ""}></label>
+        ${l.natureza === "transferencia" ? "<span></span>" : `<label>Conta<select id="fp-conta">${opcoesContas(l.conta_id || contaPadrao())}</select></label>`}
       </div>
+      ${baseImposto({ ...l, pago_em: hoje() }) > 0 && contaPoupanca() ? `<p class="at-sub">${percentualCampo(fin.config?.percentual_imposto)}% da parte do escritório irá para a poupança como reserva de imposto.</p>` : ""}
       ${l.compromisso_id ? '<p class="at-sub">O lembrete na agenda será marcado como cumprido.</p>' : ""}`,
   });
+}
+
+// ------------------------------------------------------------- transferências entre contas
+
+function abrirTransferencia(l, base = {}) {
+  const novo = !l?.id;
+  const poup = contaPoupanca();
+  const d = novo ? {
+    natureza: "transferencia", vencimento: hoje(), pago_em: hoje(), conta_id: contaPadrao(), conta_destino_id: poup?.id || null,
+    categoria_id: categoriaPorNome("Aplicação na poupança", "transferencia")?.id, ...base,
+  } : l;
+  const origem = !novo && d.origem_id && fin.lancamentos.find((x) => x.id === d.origem_id);
+  abrirDialogo({
+    titulo: novo ? "Nova transferência entre contas" : "Editar transferência",
+    somenteLeitura: !pode("financeiro", 2),
+    excluir: !novo && !origem && (pode("financeiro", 3) || (pode("financeiro", 2) && !d.pago_em)) ? () => excluirLancamento(d) : null,
+    salvar: () => salvarTransferencia(l, d),
+    corpo: `
+      <label>Tipo<select id="ft-categoria">${opcoesCategorias("transferencia", d.categoria_id)}</select></label>
+      <label>Descrição<input id="ft-descricao" maxlength="200" value="${esc(d.descricao || "")}" placeholder="Ex.: Aplicação na poupança"></label>
+      <div class="linha2">
+        <label>Sai da conta<select id="ft-origem">${opcoesContas(d.conta_id)}</select></label>
+        <label>Entra na conta<select id="ft-destino">${opcoesContas(d.conta_destino_id)}</select></label>
+      </div>
+      <div class="linha3">
+        <label>Valor (R$)<input id="ft-valor" inputmode="decimal" value="${esc(valorCampo(d.valor))}" placeholder="0,00"></label>
+        <label>Data prevista<input type="date" id="ft-vencimento" value="${esc(d.vencimento || "")}"></label>
+        <label>Realizada em<input type="date" id="ft-pago" value="${esc(d.pago_em || "")}"></label>
+      </div>
+      <p class="at-sub">Transferências mudam o saldo das contas, mas não entram em receitas, despesas nem no resultado. Deixe “realizada em” vazio para programar.</p>
+      <label>Observações<textarea id="ft-obs" rows="2">${esc(d.observacoes || "")}</textarea></label>
+      ${origem ? `<div class="vinculo">Reserva automática de imposto da receita <a href="#financeiro/lancamento/${esc(origem.id)}">${esc(origem.descricao)}</a>. Se a receita mudar, esta reserva é recalculada.</div>` : ""}
+      ${d.referencia ? '<div class="vinculo">Resgate automático: soma das reservas de imposto do mês. O valor é recalculado enquanto não for realizado.</div>' : ""}
+      ${rodapeAutoria(l)}`,
+  });
+}
+
+function salvarTransferencia(l, d) {
+  const valor = lerValor($("ft-valor").value);
+  const vencimento = $("ft-vencimento").value;
+  const de = $("ft-origem").value, para = $("ft-destino").value;
+  if (!(valor > 0) || !vencimento || !de || !para) { avisar("Preencha contas, valor e data."); return; }
+  if (de === para) { avisar("Escolha contas diferentes."); return; }
+  const cat = $("ft-categoria").value || null;
+  const dados = {
+    natureza: "transferencia", valor, vencimento, pago_em: $("ft-pago").value || null,
+    conta_id: de, conta_destino_id: para, categoria_id: cat,
+    descricao: $("ft-descricao").value.trim() || categoria(cat)?.nome || "Transferência entre contas",
+    observacoes: $("ft-obs").value.trim() || null,
+  };
+  return executar(async () => {
+    const salvo = await gravarLancamento(l?.id, dados);
+    // resgate do imposto realizado: as reservas do mês deixam de alterar o valor dele
+    if (salvo.origem_id && salvo.pago_em) await atualizarResgate(salvo.pago_em.slice(0, 7));
+    return null;
+  }, "Transferência salva.");
 }
 
 // ------------------------------------------------------------- contratos de honorários
@@ -652,6 +916,65 @@ function abrirPagamento(l) {
 function atendimentosFechados(atual) {
   return at.lista.filter((a) => ["aguardando_distribuicao", "distribuida"].includes(a.situacao) || a.id === atual)
     .map((a) => [a.id, `${dataBR(a.data_atendimento)} · ${tituloAtendimento(a)}`]);
+}
+
+function linhaParcela(p, i) {
+  const pago = !!p.pago_em;
+  return `<tr data-id="${esc(p.id || "")}" ${pago ? 'data-pago="1"' : ""}>
+    <td class="num">${i + 1}</td>
+    <td><input type="date" class="pc-venc" value="${esc(p.vencimento || "")}" ${pago ? "disabled" : ""} aria-label="Vencimento"></td>
+    <td><input class="pc-valor" inputmode="decimal" value="${esc(valorCampo(p.valor))}" ${pago ? "disabled" : ""} aria-label="Valor"></td>
+    <td>${pago ? `<span class="selo-at distribuida">recebida ${dataBR(p.pago_em).slice(0, 5)}</span>` : p.id ? (emAtraso(p) ? '<span class="selo-at atrasado">em atraso</span>' : '<span class="selo-at">a vencer</span>') : '<span class="selo-at">nova</span>'}</td>
+    <td>${pago ? (p.id ? `<a href="#financeiro/lancamento/${esc(p.id)}">abrir</a>` : "") : '<button type="button" class="botao-sec mini" data-remover-parcela>Remover</button>'}</td>
+  </tr>`;
+}
+
+function tabelaParcelas(parcelas) {
+  return `
+  <table class="fin mini parcelas"><thead><tr><th class="num">#</th><th>Vencimento</th><th>Valor (R$)</th><th></th><th></th></tr></thead>
+    <tbody id="pc-corpo">${parcelas.map(linhaParcela).join("")}</tbody></table>
+  <div class="acoes-dlg"><button type="button" class="botao-sec mini" data-mais-parcela>+ Parcela</button>
+    <span class="at-sub" id="pc-total"></span></div>`;
+}
+
+function lerParcelas() {
+  return [...document.querySelectorAll("#pc-corpo tr")].map((tr) => ({
+    id: tr.dataset.id || null, pago: !!tr.dataset.pago,
+    vencimento: tr.querySelector(".pc-venc").value, valor: lerValor(tr.querySelector(".pc-valor").value),
+  }));
+}
+
+function atualizarTotalParcelas() {
+  if (!$("pc-total")) return;
+  const ps = lerParcelas();
+  ps.forEach((_, i) => { document.querySelectorAll("#pc-corpo tr")[i].firstElementChild.textContent = i + 1; });
+  const total = soma(ps.filter((p) => p.valor > 0));
+  const alvo = $("fc-valor") ? lerValor($("fc-valor").value) : NaN;
+  const dif = alvo > 0 ? centavos(alvo - total) : 0;
+  $("pc-total").innerHTML = `${ps.length} parcela(s) · total ${moeda(total)}` +
+    (dif ? ` <span class="atrasado">(${dif > 0 ? "faltam" : "sobram"} ${moeda(Math.abs(dif))} para o valor do contrato)</span>` : "");
+}
+
+// gera a tabela a partir de valor, número de parcelas e 1º vencimento (só antes de mexer na tabela)
+function gerarParcelasContrato(forcar = false) {
+  const corpo = $("pc-corpo");
+  if (!corpo || (corpo.dataset.manual && !forcar)) return atualizarTotalParcelas();
+  const tipo = escolhido("fc-tipo");
+  const valor = lerValor($("fc-valor")?.value), venc = $("fc-vencimento")?.value;
+  const pagas = lerParcelas().filter((p) => p.pago);
+  let novas = [];
+  if (tipo === "mensal") {
+    if (valor > 0 && venc) novas = Array.from({ length: MESES_MENSAL }, (_, i) => ({ vencimento: somarMeses(venc, i), valor }));
+  } else {
+    const n = Math.max(1, Math.min(120, Number($("fc-parcelas").value) || 1));
+    const restante = centavos(valor - soma(pagas));
+    if (restante > 0 && venc) novas = montarParcelas({ valor: restante, vencimento: venc, descricao: "" }, n - pagas.length || 1, true);
+  }
+  const existentes = [...corpo.querySelectorAll("tr")].filter((tr) => !tr.dataset.pago).map((tr) => tr.dataset.id).filter(Boolean);
+  corpo.innerHTML = [...pagas, ...novas.map((p, i) => ({ ...p, id: existentes[i] || null }))].map((p, i) => linhaParcela(
+    p.pago ? fin.lancamentos.find((l) => l.id === p.id) : p, i)).join("");
+  delete corpo.dataset.manual;
+  atualizarTotalParcelas();
 }
 
 function abrirContrato(c, atendimento) {
@@ -662,9 +985,12 @@ function abrirContrato(c, atendimento) {
     atendimento_id: atendimento?.id || null, processo: atendimento?.processo || "",
   };
   const r = novo ? null : resumoContrato(c);
-  const exito = d.tipo !== "fixo";
+  const parcelas = novo ? [] : [...r.lancs].filter((l) => l.parcela || c.tipo === "mensal").sort((a, b) => a.vencimento.localeCompare(b.vencimento));
+  const outros = novo ? [] : r.lancs.filter((l) => !parcelas.includes(l));
+  const temParcelas = d.tipo !== "exito";
+  const primeiro = parcelas.find((p) => !p.pago_em)?.vencimento || parcelas[0]?.vencimento || hoje();
   abrirDialogo({
-    titulo: novo ? "Novo contrato de honorários" : `Honorários · ${d.cliente_nome}`,
+    titulo: novo ? "Novo contrato de honorários" : `Editar contrato · ${d.cliente_nome}`,
     somenteLeitura: !pode("financeiro", 2),
     excluir: !novo && pode("financeiro", 3) ? () => excluirContrato(c) : null,
     salvar: () => salvarContrato(c, d),
@@ -675,133 +1001,183 @@ function abrirContrato(c, atendimento) {
       </div>
       <label>Atendimento de origem<select id="fc-atendimento">${opcoes(atendimentosFechados(d.atendimento_id), d.atendimento_id, "—")}</select></label>
       <span class="rotulo">Tipo de honorários</span>
-      ${escolhas("fc-tipo", Object.entries(TIPOS_CONTRATO), d.tipo, !novo)}
-      <div id="fc-fixo" ${d.tipo === "exito" ? "hidden" : ""}>
-        ${novo ? `
+      ${escolhas("fc-tipo", Object.entries(TIPOS_CONTRATO), d.tipo)}
+      <div id="fc-fixo" ${temParcelas ? "" : "hidden"}>
         <div class="linha3">
-          <label>Valor total fixo (R$)<input id="fc-valor" inputmode="decimal" placeholder="0,00"></label>
-          <label>Parcelas<input type="number" id="fc-parcelas" min="1" max="120" value="1"></label>
-          <label>1º vencimento<input type="date" id="fc-vencimento" value="${hoje()}"></label>
+          <label><span id="fc-valor-rotulo">${d.tipo === "mensal" ? "Valor mensal (R$)" : "Valor total (R$)"}</span><input id="fc-valor" inputmode="decimal" value="${esc(valorCampo(d.valor_fixo))}" placeholder="0,00"></label>
+          <label id="fc-parcelas-l" ${d.tipo === "mensal" ? "hidden" : ""}>Parcelas<input type="number" id="fc-parcelas" min="1" max="120" value="${esc(String(d.parcelas || 1))}"></label>
+          <label>${novo ? "1º vencimento" : "Próximo vencimento"}<input type="date" id="fc-vencimento" value="${esc(primeiro)}"></label>
         </div>
         <div class="linha2">
-          <label>Conta para receber<select id="fc-conta">${opcoesContas(contaPadrao())}</select></label>
-          <label class="check fc-agenda"><input type="checkbox" id="fc-agenda"> Lembrar cada parcela na Agenda</label>
+          <label>Conta para receber<select id="fc-conta">${opcoesContas(parcelas[0]?.conta_id || contaPadrao())}</select></label>
+          ${novo ? '<label class="check fc-agenda"><input type="checkbox" id="fc-agenda"> Lembrar cada parcela na Agenda</label>' : "<span></span>"}
         </div>
-        <p class="at-sub" id="fc-previa"></p>`
-        : `<p>Valor fixo: <strong>${moeda(d.valor_fixo)}</strong>${d.parcelas > 1 ? ` em ${d.parcelas} parcelas` : ""} ·
-            recebido ${moeda(r.recebido)}${r.parcelas.length ? ` · ${r.pagas.length} de ${r.parcelas.length} parcela(s) paga(s)` : ""}.</p>`}
+        <p class="at-sub" id="fc-ajuda">${d.tipo === "mensal"
+          ? `Sem data de término: o sistema mantém sempre ${MESES_MENSAL} meses lançados à frente. Ao encerrar o contrato, as parcelas futuras em aberto são removidas.`
+          : "Ajuste data e valor de cada parcela na tabela abaixo, se forem diferentes."}</p>
+        <div class="acoes-dlg"><button type="button" class="botao-sec mini" data-gerar-parcelas>${novo ? "Gerar parcelas" : "Refazer parcelas em aberto"}</button></div>
+        ${tabelaParcelas(parcelas)}
       </div>
-      <div id="fc-exito" ${exito ? "" : "hidden"}>
-        <label>Percentual de êxito (%)<input id="fc-percentual" inputmode="decimal" value="${esc(d.percentual_exito != null ? String(d.percentual_exito).replace(".", ",") : "")}" placeholder="30"></label>
+      <div id="fc-exito" ${["exito", "fixo_exito"].includes(d.tipo) ? "" : "hidden"}>
+        <label>Percentual de êxito (%)<input id="fc-percentual" inputmode="decimal" value="${esc(percentualCampo(d.percentual_exito))}" placeholder="30"></label>
       </div>
       ${novo ? "" : `<label>Situação<select id="fc-situacao">${opcoes(Object.entries(SITUACOES_CONTRATO), d.situacao)}</select></label>`}
       <label>Observações<textarea id="fc-obs" rows="2">${esc(d.observacoes || "")}</textarea></label>
       ${novo ? "" : `
         <div class="bloco-dlg">
-          <span class="rotulo">Lançamentos deste contrato</span>
-          ${r.lancs.length ? `<table class="fin mini"><tbody>${[...r.lancs].sort((a, b) => a.vencimento.localeCompare(b.vencimento)).map((l) => `
+          <span class="rotulo">Recebido neste contrato: <strong>${moeda(r.recebido)}</strong></span>
+          ${outros.length ? `<table class="fin mini"><tbody>${outros.sort((a, b) => a.vencimento.localeCompare(b.vencimento)).map((l) => `
             <tr><td>${dataBR(l.vencimento)}</td><td><a href="#financeiro/lancamento/${esc(l.id)}">${esc(l.descricao)}</a></td>
-            <td class="num valor">${moeda(l.valor)}</td>
-            <td>${l.pago_em ? '<span class="selo-at distribuida">recebido</span>' : emAtraso(l) ? '<span class="selo-at atrasado">em atraso</span>' : '<span class="selo-at">a vencer</span>'}</td></tr>`).join("")}
-          </tbody></table>` : '<p class="at-sub">Nenhum lançamento ainda.</p>'}
+            <td class="num valor">${moeda(l.valor)}</td><td>${seloSituacao(l)}</td></tr>`).join("")}</tbody></table>` : ""}
           ${pode("financeiro", 2) ? `<div class="acoes-dlg">
-            ${exito ? `<button type="button" class="botao-sec mini" data-exito="${esc(c.id)}">+ Recebimento de êxito</button>` : ""}
-            <button type="button" class="botao-sec mini" data-parcela-extra="${esc(c.id)}">+ Outra parcela</button></div>` : ""}
-          <p class="at-sub">Para mudar valor ou data de uma parcela, abra a parcela.</p>
+            ${["exito", "fixo_exito"].includes(d.tipo) ? `<button type="button" class="botao-sec mini" data-exito="${esc(c.id)}">+ Recebimento de êxito</button>
+            <button type="button" class="botao-sec mini" data-recebimento-contrato="${esc(c.id)}">+ Alvará ou acordo deste contrato</button>` : ""}
+          </div>` : ""}
         </div>`}
       ${rodapeAutoria(c)}`,
   });
-  if (novo) atualizarPreviaContrato();
+  if (novo) gerarParcelasContrato(true);
+  else { $("pc-corpo").dataset.manual = "1"; atualizarTotalParcelas(); } // só refaz as parcelas pelo botão
 }
 
-function atualizarPreviaContrato() {
-  if (!$("fc-previa")) return;
-  const valor = lerValor($("fc-valor").value), n = Math.max(1, Number($("fc-parcelas").value) || 1), venc = $("fc-vencimento").value;
-  if (!(valor > 0) || !venc) { $("fc-previa").textContent = ""; return; }
-  const linhas = montarParcelas({ valor, vencimento: venc, descricao: "" }, n, true);
-  $("fc-previa").textContent = n === 1
-    ? `Uma parcela de ${moeda(valor)} em ${dataBR(venc)}.`
-    : `${n} parcelas de ${moeda(linhas[0].valor)}${linhas[n - 1].valor !== linhas[0].valor ? ` (a última de ${moeda(linhas[n - 1].valor)})` : ""}, de ${dataBR(venc)} a ${dataBR(linhas[n - 1].vencimento)}.`;
-}
-
-async function salvarContrato(c, d) {
+function salvarContrato(c, d) {
   const novo = !c;
   const clienteNome = $("fc-cliente").value.trim();
   if (!clienteNome) { avisar("Informe o cliente."); return; }
   const cliente = clientePorNome(clienteNome);
-  const tipo = novo ? escolhido("fc-tipo") : c.tipo;
-  const percentual = tipo === "fixo" ? null : lerValor($("fc-percentual").value);
-  if (tipo !== "fixo" && !(percentual > 0 && percentual <= 100)) { avisar("Informe o percentual de êxito."); return; }
+  const tipo = escolhido("fc-tipo");
+  const comExito = ["exito", "fixo_exito"].includes(tipo);
+  const percentual = comExito ? lerValor($("fc-percentual").value) : null;
+  if (comExito && !(percentual > 0 && percentual <= 100)) { avisar("Informe o percentual de êxito."); return; }
+  const situacao = novo ? "ativo" : $("fc-situacao").value;
+  const parcelas = tipo === "exito" ? [] : lerParcelas();
+  const valorFixo = lerValor($("fc-valor").value);
+  if (tipo !== "exito") {
+    if (!(valorFixo > 0)) { avisar(tipo === "mensal" ? "Informe o valor mensal." : "Informe o valor total."); return; }
+    if (!parcelas.length) { avisar("Gere as parcelas (botão “Gerar parcelas”)."); return; }
+    if (parcelas.some((p) => !p.pago && (!p.vencimento || !(p.valor > 0)))) { avisar("Toda parcela precisa de data e valor."); return; }
+  }
   const dados = {
     cliente_nome: clienteNome,
     cliente_id: cliente?.id ?? (clienteNome === d.cliente_nome ? d.cliente_id : null),
     processo: $("fc-processo").value.trim() || null,
     atendimento_id: $("fc-atendimento").value || null,
+    tipo, situacao,
     percentual_exito: percentual,
+    valor_fixo: tipo === "exito" ? null : valorFixo,
+    parcelas: tipo === "exito" || tipo === "mensal" ? null : parcelas.length,
+    dia_vencimento: tipo === "mensal" ? Number(($("fc-vencimento").value || hoje()).slice(8)) : null,
+    inicio: tipo === "mensal" ? (parcelas[0]?.vencimento || $("fc-vencimento").value) : null,
     observacoes: $("fc-obs").value.trim() || null,
   };
-  let parcelas = [];
-  if (novo) {
-    dados.tipo = tipo;
-    if (tipo !== "exito") {
-      const valor = lerValor($("fc-valor").value);
-      const n = Math.max(1, Math.min(120, Number($("fc-parcelas").value) || 1));
-      const venc = $("fc-vencimento").value;
-      if (!(valor > 0) || !venc) { avisar("Informe o valor fixo e o primeiro vencimento."); return; }
-      dados.valor_fixo = valor;
-      dados.parcelas = n;
-      parcelas = montarParcelas({
-        natureza: "receita", descricao: `Honorários — ${clienteNome}`, valor, vencimento: venc, pago_em: null,
-        categoria_id: categoriaPorNome("Honorários fixos", "receita")?.id || null, conta_id: $("fc-conta").value || null,
-        cliente_nome: clienteNome, cliente_id: dados.cliente_id, processo: dados.processo, atendimento_id: dados.atendimento_id,
-      }, n, true);
-      if (n === 1) Object.assign(parcelas[0], { parcela: 1, total_parcelas: 1 });
-    }
-  } else {
-    dados.situacao = $("fc-situacao").value;
-  }
-  $("dfin-ok").disabled = true;
-  try {
-    const consulta = novo ? sb.from("fin_contratos").insert(dados) : sb.from("fin_contratos").update(dados).eq("id", c.id);
-    const { data: salvo, error } = await consulta.select().single();
-    if (error) { avisar(mensagemErro(error), 4000); return; }
+  const contaId = $("fc-conta").value || null;
+  const lembrar = novo && $("fc-agenda")?.checked;
+  return executar(async () => {
+    const q = novo ? sb.from("fin_contratos").insert(dados) : sb.from("fin_contratos").update(dados).eq("id", c.id);
+    const { data: salvo, error } = await q.select().single();
+    if (error) throw new Error(mensagemErro(error));
     guardar(fin.contratos, salvo);
     let aviso = null;
-    if (parcelas.length) {
-      const { data, error: e2 } = await sb.from("fin_lancamentos").insert(parcelas.map((p) => ({ ...p, contrato_id: salvo.id }))).select();
-      if (e2) { avisar(`Contrato salvo, mas as parcelas não: ${mensagemErro(e2)}`, 6000); return; }
-      data.forEach((x) => guardar(fin.lancamentos, x));
-      if ($("fc-agenda").checked) for (const x of data) aviso = (await sincronizarVencimento(x, true)) || aviso;
-    }
-    fecharDialogo();
-    renderizarFinanceiro();
-    if (at.carregado) renderizarAtendimentos();
-    avisar(aviso ? `Salvo. Atenção — ${aviso}` : novo && parcelas.length > 1 ? `Contrato salvo com ${parcelas.length} parcelas a receber.` : "Contrato salvo.", aviso ? 5000 : 3000);
-  } finally {
-    $("dfin-ok").disabled = false;
-  }
+    if (tipo !== "exito") aviso = await sincronizarParcelas(salvo, parcelas, contaId, lembrar);
+    if (!novo && situacao !== "ativo") aviso = (await removerParcelasFuturas(salvo)) || aviso;
+    return aviso;
+  }, novo ? "Contrato salvo." : "Contrato atualizado.");
 }
 
-async function excluirContrato(c) {
+function descricaoParcela(c, p, i, n) {
+  return c.tipo === "mensal"
+    ? `Contrato fixo — ${c.cliente_nome} — ${mesBR(p.vencimento.slice(0, 7))}`
+    : `Honorários — ${c.cliente_nome} (${i + 1}/${n})`;
+}
+
+// grava a tabela de parcelas: altera as existentes, cria as novas e remove as que saíram (só em aberto)
+async function sincronizarParcelas(c, lista, contaId, lembrar) {
+  const parcelas = [...lista].sort((a, b) => a.vencimento.localeCompare(b.vencimento)); // numeração segue as datas
+  const atuais = fin.lancamentos.filter((l) => l.contrato_id === c.id && l.natureza === "receita" && (l.parcela || c.tipo === "mensal"));
+  const cat = categoriaPorNome(c.tipo === "mensal" ? "Contrato Fixo" : "Contrato Parcelas", "receita")?.id || null;
+  const n = parcelas.length;
+  let aviso = null;
+  // primeiro sai o que foi removido da tabela (só parcelas em aberto)
+  const mantidas = new Set(parcelas.map((p) => p.id).filter(Boolean));
+  for (const l of atuais.filter((x) => !mantidas.has(x.id) && !x.pago_em)) {
+    if (l.compromisso_id) await sincronizarVencimento(l, false);
+    await apagarLancamento(l.id);
+  }
+  for (const [i, p] of parcelas.entries()) {
+    const existente = p.id && atuais.find((l) => l.id === p.id);
+    if (existente?.pago_em) {
+      if (existente.parcela !== i + 1 || existente.total_parcelas !== n) await gravarLancamento(existente.id, { parcela: i + 1, total_parcelas: n });
+      continue;
+    }
+    const dados = {
+      natureza: "receita", descricao: descricaoParcela(c, p, i, n), valor: p.valor, vencimento: p.vencimento,
+      categoria_id: existente?.categoria_id || cat, conta_id: contaId || existente?.conta_id || null,
+      cliente_nome: c.cliente_nome, cliente_id: c.cliente_id, processo: c.processo, atendimento_id: c.atendimento_id,
+      contrato_id: c.id, parcela: i + 1, total_parcelas: c.tipo === "mensal" ? null : n,
+    };
+    const salvo = await gravarLancamento(existente?.id, dados);
+    if (lembrar || salvo.compromisso_id) aviso = (await sincronizarVencimento(salvo, lembrar || compromissoAtivo(salvo))) || aviso;
+  }
+  return aviso;
+}
+
+// contrato encerrado ou cancelado: parcelas futuras em aberto deixam de existir
+async function removerParcelasFuturas(c) {
+  const futuras = fin.lancamentos.filter((l) => l.contrato_id === c.id && !l.pago_em && l.vencimento > hoje());
+  for (const l of futuras) {
+    if (l.compromisso_id) await sincronizarVencimento(l, false);
+    await apagarLancamento(l.id);
+  }
+  return futuras.length ? `${futuras.length} parcela(s) futura(s) removida(s)` : null;
+}
+
+// mantém os contratos fixos mensais sempre com 12 meses lançados à frente
+async function estenderMensais() {
+  let criadas = 0;
+  const limite = somarMeses(hoje(), MESES_MENSAL - 1);
+  for (const c of fin.contratos.filter((x) => x.tipo === "mensal" && x.situacao === "ativo" && x.valor_fixo > 0)) {
+    const lancs = fin.lancamentos.filter((l) => l.contrato_id === c.id).sort((a, b) => a.vencimento.localeCompare(b.vencimento));
+    const ultima = lancs[lancs.length - 1];
+    if (!ultima) continue;
+    let venc = somarMeses(ultima.vencimento, 1, c.dia_vencimento);
+    while (venc <= limite) {
+      const referencia = `mensal-${c.id}-${venc.slice(0, 7)}`;
+      const existe = fin.lancamentos.some((l) => l.referencia === referencia ||
+        (l.contrato_id === c.id && l.vencimento.slice(0, 7) === venc.slice(0, 7)));
+      if (!existe) {
+        try {
+          await gravarLancamento(null, {
+            natureza: "receita", descricao: descricaoParcela(c, { vencimento: venc }), valor: c.valor_fixo, vencimento: venc,
+            categoria_id: ultima.categoria_id, conta_id: ultima.conta_id, cliente_nome: c.cliente_nome, cliente_id: c.cliente_id,
+            processo: c.processo, atendimento_id: c.atendimento_id, contrato_id: c.id,
+            parcela: (ultima.parcela || lancs.length) + criadas + 1, total_parcelas: null, referencia,
+          });
+          criadas++;
+        } catch { return criadas; } // outra pessoa criou ao mesmo tempo: fica para a próxima carga
+      }
+      venc = somarMeses(venc, 1, c.dia_vencimento);
+    }
+  }
+  return criadas;
+}
+
+function excluirContrato(c) {
   const r = resumoContrato(c);
   if (r.lancs.some((l) => l.pago_em)) {
     avisar("Este contrato já tem valores recebidos. Em vez de excluir, mude a situação para “Encerrado” ou “Cancelado”.", 6000);
     return;
   }
   if (!confirm(`Excluir o contrato de ${c.cliente_nome} e ${r.lancs.length} parcela(s) a receber? Esta ação não pode ser desfeita.`)) return;
-  for (const l of r.lancs) {
-    if (l.compromisso_id) await sincronizarVencimento(l, false);
-    const { error } = await sb.from("fin_lancamentos").delete().eq("id", l.id);
-    if (error) { avisar(mensagemErro(error), 4000); return; }
-    fin.lancamentos = fin.lancamentos.filter((x) => x.id !== l.id);
-  }
-  const { error } = await sb.from("fin_contratos").delete().eq("id", c.id);
-  if (error) { avisar(mensagemErro(error), 4000); return; }
-  fin.contratos = fin.contratos.filter((x) => x.id !== c.id);
-  fecharDialogo();
-  renderizarFinanceiro();
-  if (at.carregado) renderizarAtendimentos();
-  avisar("Contrato excluído.");
+  return executar(async () => {
+    for (const l of r.lancs) {
+      if (l.compromisso_id) await sincronizarVencimento(l, false);
+      await apagarLancamento(l.id);
+    }
+    const { error } = await sb.from("fin_contratos").delete().eq("id", c.id);
+    if (error) throw new Error(mensagemErro(error));
+    retirar("contratos", c.id);
+    return null;
+  }, "Contrato excluído.");
 }
 
 function baseDoContrato(c, extra) {
@@ -811,135 +1187,183 @@ function baseDoContrato(c, extra) {
   };
 }
 
-// ------------------------------------------------------------- alvarás
+// ------------------------------------------------------------- alvarás e acordos (valor total com repasse)
 
-function abrirAlvara(a) {
-  const novo = !a;
-  const d = a || { data_levantamento: hoje(), conta_id: contaPadrao(), descontos: 0 };
-  const contratos = fin.contratos.filter((c) => c.percentual_exito != null || c.id === d.contrato_id)
-    .map((c) => [c.id, `${c.cliente_nome}${c.processo ? ` · ${c.processo}` : ""} · ${String(c.percentual_exito ?? "").replace(".", ",")}%`]);
+function abrirRecebimento(a, base = {}) {
+  const novo = !a?.id;
+  const d = novo ? { origem: "alvara", conta_id: contaPadrao(), descontos: 0, ...base } : a;
+  const contratos = fin.contratos.map((c) => [c.id, `${c.cliente_nome}${c.processo ? ` · ${c.processo}` : ""}${c.percentual_exito != null ? ` · ${percentualCampo(c.percentual_exito)}%` : ""}`]);
+  const irmas = !novo && a.grupo ? fin.alvaras.filter((x) => x.grupo === a.grupo && x.id !== a.id).sort((x, y) => x.parcela - y.parcela) : [];
+  const pct = d.percentual ?? (d.valor_levantado ? centavos((100 * d.honorarios) / d.valor_levantado) : null);
   abrirDialogo({
-    titulo: novo ? "Novo alvará" : `Alvará · ${d.cliente_nome}`,
+    titulo: novo ? "Novo alvará ou acordo" : `Editar ${ORIGENS[d.origem].toLowerCase()}${d.total_parcelas > 1 ? ` (parcela ${d.parcela}/${d.total_parcelas})` : ""} · ${d.cliente_nome}`,
     somenteLeitura: !pode("financeiro", 2),
-    excluir: !novo && pode("financeiro", 3) ? () => excluirAlvara(a) : null,
-    salvar: () => salvarAlvara(a, d),
+    excluir: !novo && (pode("financeiro", 3) || (pode("financeiro", 2) && !d.data_levantamento)) ? () => excluirRecebimento(a) : null,
+    salvar: () => salvarRecebimento(a, d),
     corpo: `
+      ${escolhas("fa-origem", Object.entries(ORIGENS), d.origem, !novo)}
       <label>Contrato de honorários (opcional)<select id="fa-contrato">${opcoes(contratos, d.contrato_id, "—")}</select></label>
       <div class="linha2">
         <label>Cliente<input id="fa-cliente" list="fin-clientes" required maxlength="200" value="${esc(d.cliente_nome || "")}"></label>
         <label>Processo<input id="fa-processo" maxlength="60" value="${esc(d.processo || "")}"></label>
       </div>
-      <div class="linha2">
-        <label>Data do levantamento<input type="date" id="fa-data" required value="${esc(d.data_levantamento)}"></label>
-        <label>Conta que recebeu<select id="fa-conta">${opcoesContas(d.conta_id)}</select></label>
-      </div>
       <div class="linha3">
-        <label>Valor levantado (R$)<input id="fa-levantado" inputmode="decimal" required value="${esc(valorCampo(d.valor_levantado))}"></label>
-        <label>Honorários retidos (R$)<input id="fa-honorarios" inputmode="decimal" value="${esc(valorCampo(d.honorarios))}"></label>
-        <label>Custas reembolsadas (R$)<input id="fa-descontos" inputmode="decimal" value="${esc(valorCampo(d.descontos))}"></label>
+        <label><span id="fa-valor-rotulo">${novo && d.origem === "acordo" ? "Valor total do acordo (R$)" : "Valor total (R$)"}</span><input id="fa-levantado" inputmode="decimal" required value="${esc(valorCampo(d.valor_levantado))}"></label>
+        <label>Honorários do escritório (%)<input id="fa-percentual" inputmode="decimal" value="${esc(percentualCampo(pct))}" placeholder="30"></label>
+        <label>Honorários do escritório (R$)<input id="fa-honorarios" inputmode="decimal" value="${esc(valorCampo(d.honorarios))}"></label>
       </div>
-      <button type="button" class="botao-sec mini" id="fa-calcular" hidden></button>
+      <div class="linha2">
+        <label>Custas reembolsadas ao escritório (R$)<input id="fa-descontos" inputmode="decimal" value="${esc(valorCampo(d.descontos))}"></label>
+        <label>Conta que recebe<select id="fa-conta">${opcoesContas(d.conta_id)}</select></label>
+      </div>
+      <div id="fa-acordo" ${novo && d.origem === "acordo" ? "" : "hidden"}>
+        <div class="linha2">
+          <label>Número de parcelas<input type="number" id="fa-parcelas" min="1" max="120" value="1"></label>
+          <label>1º vencimento<input type="date" id="fa-primeiro" value="${hoje()}"></label>
+        </div>
+        <p class="at-sub" id="fa-previa-acordo"></p>
+      </div>
+      <div id="fa-datas" ${novo && d.origem === "acordo" ? "hidden" : ""}>
+        <div class="linha3">
+          <label>${d.origem === "acordo" ? "Vencimento" : "Data prevista"}<input type="date" id="fa-vencimento" value="${esc(d.vencimento || d.data_levantamento || hoje())}"></label>
+          <label>Recebido em<input type="date" id="fa-data" value="${esc(novo ? (d.origem === "alvara" ? hoje() : "") : d.data_levantamento || "")}"></label>
+          <label>Repassado ao cliente em<input type="date" id="fa-repassado" value="${esc(d.repassado_em || "")}"></label>
+        </div>
+      </div>
       <p class="previa" id="fa-previa"></p>
-      <label>Repassado ao cliente em<input type="date" id="fa-repassado" value="${esc(d.repassado_em || "")}"></label>
       <label>Observações<textarea id="fa-obs" rows="2">${esc(d.observacoes || "")}</textarea></label>
-      <p class="at-sub">Os honorários retidos entram como receita (“Honorários de êxito”) na data do levantamento. O valor do cliente não entra no resultado do escritório.</p>
+      <p class="at-sub">Gera a receita do valor total (só a parte do escritório entra no resultado e na reserva de imposto) e o repasse ao cliente como conta a pagar.</p>
+      ${irmas.length ? `<div class="bloco-dlg"><span class="rotulo">Outras parcelas deste acordo</span>
+        <table class="fin mini"><tbody>${irmas.map((x) => `<tr><td>${x.parcela}/${x.total_parcelas}</td><td>${dataBR(x.vencimento)}</td>
+          <td class="num valor">${moeda(x.valor_levantado)}</td><td>${x.data_levantamento ? '<span class="selo-at distribuida">recebida</span>' : x.vencimento < hoje() ? '<span class="selo-at atrasado">em atraso</span>' : '<span class="selo-at">a receber</span>'}</td>
+          <td><a href="#financeiro/alvara/${esc(x.id)}">abrir</a></td></tr>`).join("")}</tbody></table></div>` : ""}
       ${rodapeAutoria(a)}`,
   });
-  atualizarPreviaAlvara();
+  atualizarPreviaRecebimento();
 }
 
-function atualizarPreviaAlvara() {
+function atualizarPreviaRecebimento(origemCampo) {
   if (!$("fa-previa")) return;
-  const levantado = lerValor($("fa-levantado").value) || 0;
+  const total = lerValor($("fa-levantado").value) || 0;
+  if (origemCampo === "fa-percentual" || (origemCampo === "fa-levantado" && $("fa-percentual").value)) {
+    const pct = lerValor($("fa-percentual").value);
+    if (pct >= 0) $("fa-honorarios").value = valorCampo(centavos((total * pct) / 100));
+  } else if (origemCampo === "fa-honorarios" && total > 0) {
+    $("fa-percentual").value = percentualCampo(centavos((100 * (lerValor($("fa-honorarios").value) || 0)) / total));
+  }
   const honorarios = lerValor($("fa-honorarios").value) || 0;
   const descontos = lerValor($("fa-descontos").value) || 0;
-  const contrato = fin.contratos.find((c) => c.id === $("fa-contrato").value);
-  const botao = $("fa-calcular");
-  botao.hidden = !(contrato?.percentual_exito != null && levantado > 0);
-  if (!botao.hidden) {
-    const calc = Math.round(levantado * contrato.percentual_exito) / 100;
-    botao.textContent = `Usar ${String(contrato.percentual_exito).replace(".", ",")}% do levantado: ${moeda(calc)}`;
-    botao.dataset.valor = calc;
+  const repasse = centavos(total - honorarios - descontos);
+  $("fa-previa").innerHTML = total
+    ? `Escritório: <strong>${moeda(honorarios + descontos)}</strong> · repasse ao cliente: <strong class="${repasse < 0 ? "atrasado" : ""}">${moeda(repasse)}</strong>` : "";
+  if (!$("fa-acordo").hidden) {
+    const n = Math.max(1, Number($("fa-parcelas").value) || 1);
+    const p = montarParcelas({ valor: total, vencimento: $("fa-primeiro").value || hoje(), descricao: "" }, n, true);
+    $("fa-previa-acordo").textContent = total ? `${n} parcela(s) de ${moeda(p[0].valor)}, de ${dataBR(p[0].vencimento)} a ${dataBR(p[n - 1].vencimento)}. Cada parcela separa honorários e repasse na mesma proporção; ajuste qualquer uma depois, abrindo-a.` : "";
   }
-  const repasse = levantado - honorarios - descontos;
-  $("fa-previa").innerHTML = levantado
-    ? `Repasse ao cliente: <strong class="${repasse < 0 ? "atrasado" : ""}">${moeda(repasse)}</strong>` : "";
 }
 
-async function salvarAlvara(a, d) {
-  const novo = !a;
+function salvarRecebimento(a, d) {
+  const novo = !a?.id;
+  const origem = escolhido("fa-origem") || d.origem;
   const clienteNome = $("fa-cliente").value.trim();
-  const levantado = lerValor($("fa-levantado").value);
+  const total = lerValor($("fa-levantado").value);
   const honorarios = lerValor($("fa-honorarios").value) || 0;
   const descontos = lerValor($("fa-descontos").value) || 0;
-  const dataLev = $("fa-data").value;
-  if (!clienteNome || !(levantado > 0) || !dataLev) { avisar("Preencha cliente, data e valor levantado."); return; }
-  if (honorarios + descontos > levantado) { avisar("Honorários e custas não podem passar do valor levantado."); return; }
+  if (!clienteNome || !(total > 0)) { avisar("Preencha cliente e valor total."); return; }
+  if (honorarios + descontos > total) { avisar("Honorários e custas não podem passar do valor total."); return; }
   const cliente = clientePorNome(clienteNome);
-  const dados = {
-    cliente_nome: clienteNome,
+  const pct = lerValor($("fa-percentual").value);
+  const comum = {
+    origem, cliente_nome: clienteNome,
     cliente_id: cliente?.id ?? (clienteNome === d.cliente_nome ? d.cliente_id : null),
     processo: $("fa-processo").value.trim() || null,
     contrato_id: $("fa-contrato").value || null,
-    data_levantamento: dataLev,
     conta_id: $("fa-conta").value || null,
-    valor_levantado: levantado, honorarios, descontos,
-    repassado_em: $("fa-repassado").value || null,
+    percentual: Number.isFinite(pct) ? pct : null,
     observacoes: $("fa-obs").value.trim() || null,
   };
-  $("dfin-ok").disabled = true;
-  try {
-    const consulta = novo ? sb.from("fin_alvaras").insert(dados) : sb.from("fin_alvaras").update(dados).eq("id", a.id);
-    const { data: salvo, error } = await consulta.select().single();
-    if (error) { avisar(mensagemErro(error), 4000); return; }
-    guardar(fin.alvaras, salvo);
-
-    // honorários retidos viram (ou atualizam) a receita ligada ao alvará
-    const receita = {
-      natureza: "receita", descricao: `Êxito — ${clienteNome}${dados.processo ? ` (${dados.processo})` : ""}`,
-      valor: honorarios, vencimento: dataLev, pago_em: dataLev, conta_id: dados.conta_id,
-      categoria_id: categoriaPorNome("Honorários de êxito", "receita")?.id || null,
-      cliente_nome: clienteNome, cliente_id: dados.cliente_id, processo: dados.processo, contrato_id: dados.contrato_id,
-    };
-    let aviso = null;
-    if (honorarios > 0) {
-      const q = salvo.lancamento_id
-        ? sb.from("fin_lancamentos").update(receita).eq("id", salvo.lancamento_id)
-        : sb.from("fin_lancamentos").insert(receita);
-      const { data: lanc, error: e2 } = await q.select().single();
-      if (e2) aviso = `a receita dos honorários não foi gravada (${mensagemErro(e2)})`;
-      else {
-        guardar(fin.lancamentos, lanc);
-        if (!salvo.lancamento_id) {
-          const { data: ligado } = await sb.from("fin_alvaras").update({ lancamento_id: lanc.id }).eq("id", salvo.id).select().single();
-          if (ligado) guardar(fin.alvaras, ligado);
-        }
-      }
-    } else if (salvo.lancamento_id) {
-      const { error: e3 } = await sb.from("fin_lancamentos").delete().eq("id", salvo.lancamento_id);
-      if (e3) aviso = "a receita antiga dos honorários continua lançada; peça a quem administra o financeiro para excluí-la";
-      else fin.lancamentos = fin.lancamentos.filter((x) => x.id !== salvo.lancamento_id);
-    }
-    fecharDialogo();
-    renderizarFinanceiro();
-    avisar(aviso ? `Alvará salvo. Atenção — ${aviso}.` : "Alvará salvo.", aviso ? 6000 : 2500);
-  } finally {
-    $("dfin-ok").disabled = false;
+  let registros;
+  if (novo && origem === "acordo") {
+    const n = Math.max(1, Math.min(120, Number($("fa-parcelas").value) || 1));
+    const primeiro = $("fa-primeiro").value;
+    if (!primeiro) { avisar("Informe o 1º vencimento."); return; }
+    const valores = montarParcelas({ valor: total, vencimento: primeiro, descricao: "" }, n, true);
+    const hon = montarParcelas({ valor: honorarios, vencimento: primeiro, descricao: "" }, n, true);
+    const grupo = n > 1 ? crypto.randomUUID() : null;
+    registros = valores.map((p, i) => ({
+      ...comum, valor_levantado: p.valor, honorarios: hon[i].valor, descontos: i === 0 ? descontos : 0,
+      vencimento: p.vencimento, data_levantamento: null, repassado_em: null,
+      parcela: n > 1 ? i + 1 : null, total_parcelas: n > 1 ? n : null, grupo,
+    }));
+  } else {
+    const recebido = $("fa-data").value || null;
+    registros = [{
+      ...(novo ? {} : a), ...comum, valor_levantado: total, honorarios, descontos,
+      vencimento: $("fa-vencimento").value || recebido || hoje(), data_levantamento: recebido,
+      repassado_em: $("fa-repassado").value || null,
+    }];
   }
+  return executar(async () => {
+    let aviso = null;
+    for (const r of registros) aviso = (await gravarRecebimento(r)) || aviso;
+    return aviso;
+  }, registros.length > 1 ? `Acordo salvo com ${registros.length} parcelas.` : "Salvo.");
 }
 
-async function excluirAlvara(a) {
-  if (!confirm(`Excluir o alvará de ${a.cliente_nome} (${moeda(a.valor_levantado)}) e a receita dos honorários ligada a ele?`)) return;
-  const { error } = await sb.from("fin_alvaras").delete().eq("id", a.id);
-  if (error) { avisar(mensagemErro(error), 4000); return; }
-  fin.alvaras = fin.alvaras.filter((x) => x.id !== a.id);
-  if (a.lancamento_id) {
-    await sb.from("fin_lancamentos").delete().eq("id", a.lancamento_id);
-    fin.lancamentos = fin.lancamentos.filter((x) => x.id !== a.lancamento_id);
+// grava o alvará/parcela de acordo e mantém em dia a receita do valor total, o repasse e a reserva de imposto
+async function gravarRecebimento(r) {
+  const campos = ["origem", "cliente_nome", "cliente_id", "processo", "contrato_id", "conta_id", "percentual", "observacoes",
+    "valor_levantado", "honorarios", "descontos", "vencimento", "data_levantamento", "repassado_em", "parcela", "total_parcelas", "grupo"];
+  const dados = Object.fromEntries(campos.filter((c) => c in r).map((c) => [c, r[c]]));
+  const q = r.id ? sb.from("fin_alvaras").update(dados).eq("id", r.id) : sb.from("fin_alvaras").insert(dados);
+  const { data: salvo, error } = await q.select().single();
+  if (error) throw new Error(mensagemErro(error));
+  guardar(fin.alvaras, salvo);
+
+  const rotulo = salvo.origem === "acordo" ? "Acordo" : "Alvará";
+  const sufixo = salvo.total_parcelas > 1 ? ` (${salvo.parcela}/${salvo.total_parcelas})` : "";
+  const proc = salvo.processo ? ` · ${salvo.processo}` : "";
+  const comum = { cliente_nome: salvo.cliente_nome, cliente_id: salvo.cliente_id, processo: salvo.processo, conta_id: salvo.conta_id };
+  const totalLanc = await gravarLancamento(salvo.lancamento_id, {
+    ...comum, natureza: "receita", descricao: `${rotulo} — ${salvo.cliente_nome}${sufixo}${proc}`,
+    valor: salvo.valor_levantado, vencimento: salvo.vencimento || salvo.data_levantamento || hoje(), pago_em: salvo.data_levantamento,
+    categoria_id: categoriaPorNome(salvo.origem === "acordo" ? "Parcela de Acordo – Valor Total" : "Alvará Judicial – Valor Total", "receita")?.id || null,
+    contrato_id: salvo.contrato_id,
+  });
+  let repasseId = salvo.repasse_lancamento_id;
+  let aviso = null;
+  // o repasse só vira conta a pagar depois que o dinheiro entrou
+  if (Number(salvo.repasse) > 0 && salvo.data_levantamento) {
+    const rep = await gravarLancamento(repasseId, {
+      ...comum, natureza: "despesa", descricao: `Repasse ao cliente — ${salvo.cliente_nome}${sufixo}${proc}`,
+      valor: salvo.repasse, vencimento: salvo.data_levantamento || salvo.vencimento || hoje(), pago_em: salvo.repassado_em,
+      categoria_id: categoriaPorNome("Repasse ao Cliente", "despesa")?.id || null,
+    });
+    repasseId = rep.id;
+  } else if (repasseId) {
+    try { await apagarLancamento(repasseId); repasseId = null; } catch (e) { aviso = `o repasse antigo continua lançado (${e.message})`; }
   }
-  fecharDialogo();
-  renderizarFinanceiro();
-  avisar("Alvará excluído.");
+  if (salvo.lancamento_id !== totalLanc.id || salvo.repasse_lancamento_id !== repasseId) {
+    const { data: ligado } = await sb.from("fin_alvaras").update({ lancamento_id: totalLanc.id, repasse_lancamento_id: repasseId })
+      .eq("id", salvo.id).select().single();
+    if (ligado) guardar(fin.alvaras, ligado);
+  }
+  await atualizarReserva(totalLanc);
+  return aviso;
+}
+
+function excluirRecebimento(a) {
+  if (!confirm(`Excluir ${ORIGENS[a.origem].toLowerCase()} de ${a.cliente_nome} (${moeda(a.valor_levantado)}) com a receita e o repasse ligados a ele?`)) return;
+  return executar(async () => {
+    const reserva = fin.lancamentos.find((x) => x.origem_id === a.lancamento_id);
+    for (const id of [a.repasse_lancamento_id, a.lancamento_id].filter(Boolean)) await apagarLancamento(id);
+    if (reserva?.pago_em) await atualizarResgate(reserva.pago_em.slice(0, 7));
+    const { error } = await sb.from("fin_alvaras").delete().eq("id", a.id);
+    if (error) throw new Error(mensagemErro(error));
+    retirar("alvaras", a.id);
+    return null;
+  }, "Excluído.");
 }
 
 // ------------------------------------------------------------- configurações
@@ -954,6 +1378,8 @@ async function salvarConfig(tabela, id, linha) {
     if (!Number.isFinite(saldo)) { avisar("Saldo inicial inválido."); return; }
     dados.saldo_inicial = saldo;
   }
+  const resultado = linha.querySelector(".cfg-resultado");
+  if (resultado) dados.resultado = resultado.checked;
   const { data, error } = await sb.from(tabela).update(dados).eq("id", id).select().single();
   if (error) { avisar(mensagemErro(error), 4000); return; }
   guardar(tabela === "fin_contas" ? fin.contas : fin.categorias, data);
@@ -971,6 +1397,17 @@ async function novaConfig(tabela, dados) {
   avisar("Criado. Ajuste o nome e clique em Salvar.");
 }
 
+async function salvarReserva() {
+  const pct = lerValor($("cfg-imposto").value);
+  const desde = $("cfg-desde").value;
+  if (!(pct >= 0 && pct <= 100) || !desde) { avisar("Informe o percentual e a data."); return; }
+  const { data, error } = await sb.from("fin_config").update({ percentual_imposto: pct, reserva_desde: desde }).eq("id", 1).select().single();
+  if (error) { avisar(mensagemErro(error), 4000); return; }
+  fin.config = data;
+  renderizarFinanceiro();
+  avisar("Reserva de imposto atualizada. Vale para os próximos recebimentos registrados ou editados.", 4000);
+}
+
 // ------------------------------------------------------------- exportação
 
 function exportarFinanceiro() {
@@ -979,16 +1416,21 @@ function exportarFinanceiro() {
   const celula = (s) => `"${String(s ?? "").replace(/"/g, '""')}"`;
   const numero = (v) => Number(v).toFixed(2).replace(".", ",");
   const linhas = [
-    ["Vencimento", "Pago/recebido em", "Tipo", "Descrição", "Categoria", "Conta", "Cliente", "Processo", "Reembolsável", "Valor"],
-    ...lista.map((l) => [dataBR(l.vencimento), dataBR(l.pago_em), l.natureza === "receita" ? "Receita" : "Despesa", l.descricao,
-      nomeCategoria(l.categoria_id), nomeConta(l.conta_id), l.cliente_nome, l.processo, l.reembolsavel ? "sim" : "",
-      numero(l.natureza === "despesa" ? -l.valor : l.valor)]),
+    ["Vencimento", "Pago/recebido em", "Tipo", "Descrição", "Categoria", "Conta", "Conta destino", "Cliente", "Processo",
+      "Reembolsável", "Entra no resultado", "Valor", "Valor no resultado"],
+    ...lista.map((l) => {
+      const sinal = l.natureza === "despesa" ? -1 : 1;
+      return [dataBR(l.vencimento), dataBR(l.pago_em), NATUREZAS[l.natureza], l.descricao,
+        nomeCategoria(l.categoria_id), nomeConta(l.conta_id), nomeConta(l.conta_destino_id), l.cliente_nome, l.processo,
+        l.reembolsavel ? "sim" : "", valorResultado(l) ? "sim" : "não",
+        numero(l.natureza === "transferencia" ? l.valor : sinal * l.valor), numero(sinal * valorResultado(l))];
+    }),
   ];
-  const alvaras = fin.alvaras.filter((a) => a.data_levantamento.startsWith(mes));
-  if (alvaras.length) {
-    linhas.push([], ["Alvarás do mês"], ["Data", "Cliente", "Processo", "Levantado", "Honorários", "Custas reembolsadas", "Repasse", "Repassado em"]);
-    alvaras.forEach((a) => linhas.push([dataBR(a.data_levantamento), a.cliente_nome, a.processo,
-      numero(a.valor_levantado), numero(a.honorarios), numero(a.descontos), numero(a.repasse), dataBR(a.repassado_em)]));
+  const regs = fin.alvaras.filter((a) => (a.data_levantamento || a.vencimento || "").startsWith(mes));
+  if (regs.length) {
+    linhas.push([], ["Alvarás e acordos do mês"], ["Data", "Origem", "Cliente", "Processo", "Valor total", "Honorários", "Custas reembolsadas", "Repasse", "Recebido em", "Repassado em"]);
+    regs.forEach((a) => linhas.push([dataBR(a.vencimento), ORIGENS[a.origem], a.cliente_nome, a.processo,
+      numero(a.valor_levantado), numero(a.honorarios), numero(a.descontos), numero(a.repasse), dataBR(a.data_levantamento), dataBR(a.repassado_em)]));
   }
   const csv = "﻿" + linhas.map((l) => l.map((c) => (/^-?\d+,\d{2}$/.test(c) ? c : celula(c))).join(";")).join("\r\n");
   const link = document.createElement("a");
@@ -1005,6 +1447,7 @@ function prepararFinanceiro() {
   $("fin-mes-proximo").addEventListener("click", () => { fin.mes = somarMeses(`${fin.mes || hoje().slice(0, 7)}-01`, 1).slice(0, 7); renderizarFinanceiro(); });
   $("fin-novo-receita").addEventListener("click", () => abrirLancamento(null, { natureza: "receita" }));
   $("fin-novo-despesa").addEventListener("click", () => abrirLancamento(null, { natureza: "despesa" }));
+  $("fin-nova-transferencia").addEventListener("click", () => abrirTransferencia(null));
   $("fin-exportar").addEventListener("click", exportarFinanceiro);
   document.querySelectorAll("[data-fin-sub]").forEach((b) => b.addEventListener("click", () => {
     location.hash = `#financeiro/${b.dataset.finSub}`;
@@ -1018,11 +1461,12 @@ function prepararFinanceiro() {
     if (!t) return;
     if (t.dataset.pagar) abrirPagamento(fin.lancamentos.find((l) => l.id === t.dataset.pagar));
     else if (t.dataset.novoContrato !== undefined) abrirContrato(null);
-    else if (t.dataset.novoAlvara !== undefined) abrirAlvara(null);
+    else if (t.dataset.novoRecebimento) abrirRecebimento(null, { origem: t.dataset.novoRecebimento });
     else if (t.dataset.salvarConta) salvarConfig("fin_contas", t.dataset.salvarConta, t.closest("tr"));
     else if (t.dataset.salvarCategoria) salvarConfig("fin_categorias", t.dataset.salvarCategoria, t.closest("tr"));
     else if (t.dataset.novaConta !== undefined) novaConfig("fin_contas", { nome: "Nova conta", tipo: "banco" });
-    else if (t.dataset.novaCategoria) novaConfig("fin_categorias", { nome: "Nova categoria", natureza: t.dataset.novaCategoria });
+    else if (t.dataset.novaCategoria) novaConfig("fin_categorias", { nome: "Nova categoria", natureza: t.dataset.novaCategoria, resultado: t.dataset.novaCategoria !== "transferencia" });
+    else if (t.dataset.salvarReserva !== undefined) salvarReserva();
     else if (t.tagName === "TR") location.hash = t.dataset.ir;
   });
 
@@ -1031,24 +1475,37 @@ function prepararFinanceiro() {
   $("dlg-fin").addEventListener("click", (e) => {
     if (e.target.closest("[data-fechar]")) { fecharDialogo(); return; }
     const t = e.target.closest("button");
-    if (t?.id === "fa-calcular") { $("fa-honorarios").value = valorCampo(t.dataset.valor); atualizarPreviaAlvara(); }
-    if (t?.dataset.exito) {
+    if (!t) return;
+    if (t.dataset.exito) {
       const c = fin.contratos.find((x) => x.id === t.dataset.exito);
       abrirLancamento(null, baseDoContrato(c, {
         descricao: `Êxito — ${c.cliente_nome}`, pago_em: hoje(),
         categoria_id: categoriaPorNome("Honorários de êxito", "receita")?.id,
       }));
-    }
-    if (t?.dataset.parcelaExtra) {
-      const c = fin.contratos.find((x) => x.id === t.dataset.parcelaExtra);
-      abrirLancamento(null, baseDoContrato(c, {
-        descricao: `Honorários — ${c.cliente_nome}`, categoria_id: categoriaPorNome("Honorários fixos", "receita")?.id,
-      }));
+    } else if (t.dataset.recebimentoContrato) {
+      const c = fin.contratos.find((x) => x.id === t.dataset.recebimentoContrato);
+      abrirRecebimento(null, { origem: "alvara", contrato_id: c.id, cliente_nome: c.cliente_nome, cliente_id: c.cliente_id,
+        processo: c.processo, percentual: c.percentual_exito });
+    } else if (t.dataset.gerarParcelas !== undefined) {
+      gerarParcelasContrato(true);
+    } else if (t.dataset.maisParcela !== undefined) {
+      const ps = lerParcelas();
+      const ultima = ps[ps.length - 1];
+      $("pc-corpo").insertAdjacentHTML("beforeend", linhaParcela({
+        vencimento: ultima?.vencimento ? somarMeses(ultima.vencimento, 1) : hoje(), valor: ultima?.valor || null }, ps.length));
+      $("pc-corpo").dataset.manual = "1";
+      atualizarTotalParcelas();
+    } else if (t.dataset.removerParcela !== undefined) {
+      t.closest("tr").remove();
+      $("pc-corpo").dataset.manual = "1";
+      atualizarTotalParcelas();
     }
   });
   $("dlg-fin").addEventListener("input", (e) => {
-    if (/^fc-(valor|parcelas|vencimento)$/.test(e.target.id)) atualizarPreviaContrato();
-    if (/^fa-/.test(e.target.id)) atualizarPreviaAlvara();
+    const id = e.target.id;
+    if (/^fc-(valor|parcelas|vencimento)$/.test(id)) gerarParcelasContrato();
+    if (e.target.closest("#pc-corpo")) { $("pc-corpo").dataset.manual = "1"; atualizarTotalParcelas(); }
+    if (/^fa-/.test(id)) atualizarPreviaRecebimento(id);
   });
   $("dlg-fin").addEventListener("change", (e) => {
     const t = e.target;
@@ -1059,16 +1516,36 @@ function prepararFinanceiro() {
     }
     if (unico?.id === "fl-natureza") {
       const receita = t.value === "receita";
-      $("dfin-titulo").textContent = receita ? "Nova receita" : "Nova despesa";
+      $("dfin-titulo").textContent = `${$("dfin-titulo").textContent.startsWith("Editar") ? "Editar" : "Nova"} ${receita ? "receita" : "despesa"}`;
       $("fl-categoria").innerHTML = opcoesCategorias(t.value);
       $("fl-pago-rotulo").textContent = receita ? "Recebido em" : "Pago em";
       $("fl-reembolsavel-l").hidden = receita;
     }
     if (unico?.id === "fc-tipo") {
+      const mensal = t.value === "mensal";
       $("fc-fixo").hidden = t.value === "exito";
-      $("fc-exito").hidden = t.value === "fixo";
+      $("fc-exito").hidden = !["exito", "fixo_exito"].includes(t.value);
+      $("fc-parcelas-l").hidden = mensal;
+      $("fc-valor-rotulo").textContent = mensal ? "Valor mensal (R$)" : "Valor total (R$)";
+      $("fc-ajuda").textContent = mensal
+        ? `Sem data de término: o sistema mantém sempre ${MESES_MENSAL} meses lançados à frente. Ao encerrar o contrato, as parcelas futuras em aberto são removidas.`
+        : "Ajuste data e valor de cada parcela na tabela abaixo, se forem diferentes.";
+      gerarParcelasContrato(true);
+    }
+    if (unico?.id === "fa-origem") {
+      const acordo = t.value === "acordo";
+      $("fa-acordo").hidden = !acordo;
+      $("fa-datas").hidden = acordo;
+      $("fa-valor-rotulo").textContent = acordo ? "Valor total do acordo (R$)" : "Valor total (R$)";
+      atualizarPreviaRecebimento();
     }
     if (t.id === "fl-repetir") $("fl-vezes").disabled = !t.value;
+    if (t.id === "ft-categoria" && !$("ft-descricao").value.trim()) {
+      const nome = categoria(t.value)?.nome || "";
+      const poup = contaPoupanca();
+      if (poup && /Resgate/.test(nome)) { $("ft-origem").value = poup.id; $("ft-destino").value = contaPadrao() || ""; }
+      if (poup && /Aplicação/.test(nome)) { $("ft-origem").value = contaPadrao() || ""; $("ft-destino").value = poup.id; }
+    }
     if (t.id === "fc-atendimento" && t.value) {
       const a = at.lista.find((x) => x.id === t.value);
       if (a && !$("fc-cliente").value.trim()) $("fc-cliente").value = a.cliente_nome || "";
@@ -1078,8 +1555,9 @@ function prepararFinanceiro() {
       const c = fin.contratos.find((x) => x.id === t.value);
       if (c && !$("fa-cliente").value.trim()) $("fa-cliente").value = c.cliente_nome;
       if (c?.processo && !$("fa-processo").value.trim()) $("fa-processo").value = c.processo;
+      if (c?.percentual_exito != null && !$("fa-percentual").value) { $("fa-percentual").value = percentualCampo(c.percentual_exito); atualizarPreviaRecebimento("fa-percentual"); }
     }
-    if (/^fa-/.test(t.id)) atualizarPreviaAlvara();
+    if (/^fa-/.test(t.id)) atualizarPreviaRecebimento();
   });
   $("dlg-fin").addEventListener("close", () => {
     fin.dialogo = null;
