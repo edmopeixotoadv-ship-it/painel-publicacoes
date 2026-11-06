@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500&display=swap">
-<link rel="stylesheet" href="estilo.css?v=20261104e">
+<link rel="stylesheet" href="estilo.css?v=20261105a">
 </head>
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -31,6 +31,7 @@
       <a href="#publicacoes" data-aba="publicacoes">Publicações</a>
       <a href="#agenda" data-aba="agenda">Agenda</a>
       <a href="#atendimento" data-aba="atendimento">Atendimento</a>
+      <a href="#processos" data-aba="processos">Processos</a>
       <a href="#financeiro" data-aba="financeiro">Financeiro</a>
       <a href="#permissoes" data-aba="permissoes">Permissões</a>
     </nav>
@@ -153,6 +154,39 @@
       <p class="at-sub" id="ficha-instrucao"></p>
       <form id="ficha-form" onsubmit="return false"><fieldset id="ficha-campos"></fieldset></form>
     </div>
+  </section>
+
+  <section id="tela-processos" hidden>
+    <div id="pr-painel">
+      <div class="barra-agenda">
+        <strong class="periodo">Processos</strong>
+        <button class="botao" id="pr-novo">+ Processo</button>
+      </div>
+      <div class="resumo">
+        <button class="cartao-num" data-pr-situacao="ativos"><div class="n" id="pr-n-ativos">–</div><div class="r">Processos ativos</div></button>
+        <button class="cartao-num" data-pr-situacao="prazos"><div class="n" id="pr-n-prazos" style="color:var(--nova)">–</div><div class="r">Prazos nesta semana</div></button>
+        <button class="cartao-num estatico" disabled><div class="n" id="pr-n-audiencias">–</div><div class="r">Audiências no mês</div></button>
+        <button class="cartao-num" data-pr-situacao="parados"><div class="n" id="pr-n-parados" style="color:var(--perigo)">–</div><div class="r">Sem movimentação há 90 dias</div></button>
+      </div>
+      <div class="sugestao" id="pr-revisar" hidden></div>
+      <div class="barra-agenda">
+        <div class="grupo" role="group" aria-label="Situação">
+          <button data-pr-situacao="ativos">Ativos</button>
+          <button data-pr-situacao="revisar">A revisar</button>
+          <button data-pr-situacao="arquivados">Arquivados</button>
+          <button data-pr-situacao="todos">Todos</button>
+        </div>
+      </div>
+      <div class="filtros proc-filtros">
+        <input class="busca" id="pr-busca" type="search" placeholder="Buscar por número, cliente, parte contrária ou vara…" aria-label="Buscar processos">
+        <select id="pr-area" aria-label="Área"><option value="">Todas as áreas</option><option value="trabalhista">Trabalhista</option><option value="previdenciario">Previdenciário</option><option value="civel">Cível</option><option value="outra">Outra</option></select>
+        <select id="pr-fase" aria-label="Fase"><option value="">Todas as fases</option><option value="conhecimento">Conhecimento</option><option value="recursal">Recursal</option><option value="cumprimento_sentenca">Cumprimento de sentença</option><option value="execucao">Execução</option><option value="acordo">Acordo cumprindo</option><option value="suspenso">Suspenso</option><option value="arquivado">Arquivado</option></select>
+        <select id="pr-resp" aria-label="Responsável"><option value="">Todos os responsáveis</option></select>
+      </div>
+      <div class="contagem" id="pr-contagem"></div>
+      <div class="lista" id="pr-lista"><div class="vazio">Carregando…</div></div>
+    </div>
+    <div id="pr-ficha" hidden></div>
   </section>
 
   <section id="tela-financeiro" hidden>
@@ -293,10 +327,11 @@
 <div class="toast" id="toast" hidden></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
-<script src="fichas.js?v=20261104e"></script>
-<script src="atendimento.js?v=20261104e"></script>
-<script src="financeiro.js?v=20261104e"></script>
-<script src="permissoes.js?v=20261104e"></script>
-<script src="app.js?v=20261104e"></script>
+<script src="fichas.js?v=20261105a"></script>
+<script src="atendimento.js?v=20261105a"></script>
+<script src="financeiro.js?v=20261105a"></script>
+<script src="permissoes.js?v=20261105a"></script>
+<script src="processos.js?v=20261105a"></script>
+<script src="app.js?v=20261105a"></script>
 </body>
 </html>
