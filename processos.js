@@ -330,6 +330,7 @@ function renderizarFicha(p) {
           <span class="selo-at ${diaLocal(c.inicio) < hoje() ? "atrasado" : ""}">${diaLocal(c.inicio) < hoje() ? "vencido" : diaLocal(c.inicio) === hoje() ? "hoje" : `em ${Math.round((Date.parse(diaLocal(c.inicio)) - Date.parse(hoje())) / 864e5)} dia(s)`}</span></div>`).join("")
           : '<div class="vazio pequeno">Nenhum prazo ou audiência pendente.</div>'}
       </div>
+      ${typeof blocoTarefasProcesso === "function" ? blocoTarefasProcesso(p) : ""}
       ${blocoFinanceiro(p)}
       <div class="bloco">
         <h3>Partes</h3>
