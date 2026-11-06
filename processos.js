@@ -84,6 +84,8 @@ async function carregarProcessos() {
     return;
   }
   proc.lista = r.data;
+  // enquanto nada foi revisado, a aba abre direto na lista "a revisar"
+  if (!proc.carregado && !proc.lista.some(ativo) && proc.lista.some((p) => p.revisar)) proc.situacao = "revisar";
   proc.carregado = true;
   const resp = $("pr-resp").value;
   $("pr-resp").innerHTML = '<option value="">Todos os responsáveis</option>' +
