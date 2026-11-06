@@ -606,6 +606,7 @@ async function executar(acao, sucesso) {
     fecharDialogo();
     renderizarFinanceiro();
     if (at.carregado) renderizarAtendimentos();
+    if (typeof proc !== "undefined" && proc.carregado) renderizarProcessos();
     avisar(aviso ? `${sucesso} Atenção — ${aviso}` : sucesso, aviso ? 6000 : 2500);
   } catch (e) {
     avisar(e.message || "Não foi possível salvar.", 5000);
@@ -1678,6 +1679,8 @@ function prepararFinanceiro() {
     if (/^fa-/.test(t.id)) atualizarPreviaRecebimento();
   });
   $("dlg-fin").addEventListener("close", () => {
+    // o evento "close" chega depois; se outra janela já foi aberta no lugar, não mexe nela
+    if ($("dlg-fin").open) return;
     fin.dialogo = null;
     fin.pagamento = null;
     if (/^#financeiro\/(lancamento|contrato|alvara)\//.test(location.hash)) history.replaceState(null, "", `#financeiro/${fin.sub}`);
