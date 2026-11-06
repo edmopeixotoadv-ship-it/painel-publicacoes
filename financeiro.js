@@ -607,6 +607,7 @@ async function executar(acao, sucesso) {
     renderizarFinanceiro();
     if (at.carregado) renderizarAtendimentos();
     if (typeof proc !== "undefined" && proc.carregado) renderizarProcessos();
+    if (typeof tf !== "undefined" && tf.carregado) renderizarTarefas();
     avisar(aviso ? `${sucesso} Atenção — ${aviso}` : sucesso, aviso ? 6000 : 2500);
   } catch (e) {
     avisar(e.message || "Não foi possível salvar.", 5000);
