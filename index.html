@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500&display=swap">
-<link rel="stylesheet" href="estilo.css?v=20261105b">
+<link rel="stylesheet" href="estilo.css?v=20261105c">
 </head>
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -32,6 +32,7 @@
       <a href="#agenda" data-aba="agenda">Agenda</a>
       <a href="#atendimento" data-aba="atendimento">Atendimento</a>
       <a href="#processos" data-aba="processos">Processos</a>
+      <a href="#tarefas" data-aba="tarefas">Tarefas</a>
       <a href="#financeiro" data-aba="financeiro">Financeiro</a>
       <a href="#permissoes" data-aba="permissoes">Permissões</a>
     </nav>
@@ -189,6 +190,31 @@
     <div id="pr-ficha" hidden></div>
   </section>
 
+  <section id="tela-tarefas" hidden>
+    <div class="barra-agenda">
+      <div class="grupo" role="group" aria-label="De quem">
+        <button data-tf-escopo="minhas">Minhas</button><button data-tf-escopo="equipe">Equipe</button>
+      </div>
+      <div class="grupo" role="group" aria-label="Visualização">
+        <button data-tf-visao="quadro">Quadro</button><button data-tf-visao="lista">Lista</button>
+      </div>
+      <button class="botao" id="tf-nova">+ Tarefa</button>
+    </div>
+    <div class="resumo">
+      <div class="cartao-num estatico"><div class="n" id="tf-n-abertas">–</div><div class="r">Minhas tarefas abertas</div></div>
+      <div class="cartao-num estatico"><div class="n" id="tf-n-atrasadas" style="color:var(--perigo)">–</div><div class="r">Atrasadas</div></div>
+      <div class="cartao-num estatico"><div class="n" id="tf-n-semana" style="color:var(--nova)">–</div><div class="r">Vencem nos próximos 7 dias</div></div>
+      <div class="cartao-num estatico"><div class="n" id="tf-n-concluidas" style="color:var(--ok)">–</div><div class="r">Concluídas no mês</div></div>
+    </div>
+    <div class="filtros tf-filtros">
+      <input class="busca" id="tf-busca" type="search" placeholder="Buscar tarefa, cliente ou processo…" aria-label="Buscar tarefas">
+      <select id="tf-resp" aria-label="Responsável"><option value="">Todos os responsáveis</option></select>
+      <select id="tf-prio" aria-label="Prioridade"><option value="">Todas as prioridades</option><option value="urgente">Urgente</option><option value="alta">Alta</option><option value="normal">Normal</option></select>
+      <select id="tf-vinc" aria-label="Vínculo"><option value="">Todos os vínculos</option><option value="processo">Com processo</option><option value="cliente">Com cliente</option><option value="interna">Internas do escritório</option></select>
+    </div>
+    <div id="tf-conteudo"><div class="vazio">Carregando…</div></div>
+  </section>
+
   <section id="tela-financeiro" hidden>
     <div class="barra-agenda">
       <div class="grupo" role="group" aria-label="Mês">
@@ -327,11 +353,12 @@
 <div class="toast" id="toast" hidden></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
-<script src="fichas.js?v=20261105b"></script>
-<script src="atendimento.js?v=20261105b"></script>
-<script src="financeiro.js?v=20261105b"></script>
-<script src="permissoes.js?v=20261105b"></script>
-<script src="processos.js?v=20261105b"></script>
-<script src="app.js?v=20261105b"></script>
+<script src="fichas.js?v=20261105c"></script>
+<script src="atendimento.js?v=20261105c"></script>
+<script src="financeiro.js?v=20261105c"></script>
+<script src="permissoes.js?v=20261105c"></script>
+<script src="processos.js?v=20261105c"></script>
+<script src="tarefas.js?v=20261105c"></script>
+<script src="app.js?v=20261105c"></script>
 </body>
 </html>
