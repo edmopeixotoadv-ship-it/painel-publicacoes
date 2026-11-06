@@ -383,3 +383,64 @@ a.botao-sec.editar { text-decoration: none; color: var(--texto); white-space: no
 .cfg-linha input { padding: 7px 9px; border: 1px solid var(--borda); border-radius: 7px; background: var(--bg); color: var(--texto); }
 table.parcelas input { width: 100%; min-width: 110px; }
 table.parcelas td:first-child { width: 28px; color: var(--suave); }
+
+/* processos */
+.sugestao { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; background: var(--painel); border: 1px dashed var(--nova); border-radius: 10px; padding: 10px 14px; margin-bottom: 14px; font-size: 14px; }
+.sugestao b { color: var(--nova); }
+.proc-filtros { grid-template-columns: 2fr 1fr 1fr 1fr; }
+.proc { display: flex; gap: 14px; align-items: flex-start; background: var(--painel); border: 1px solid var(--borda); border-left: 4px solid var(--marca); border-radius: 10px; padding: 12px 14px; box-shadow: var(--sombra); }
+.proc.revisar { border-left-color: var(--nova); border-style: dashed; border-left-style: solid; }
+.proc.parado { border-left-color: var(--perigo); }
+.proc.arquivado { opacity: .6; border-left-color: var(--borda); }
+.proc-link { flex: 1; min-width: 0; color: inherit; text-decoration: none; }
+.proc-link:hover .proc-num { text-decoration: underline; }
+.proc-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.proc-num { font-weight: 650; font-variant-numeric: tabular-nums; word-break: break-word; }
+.proc-partes { font-size: 14px; word-break: break-word; }
+.proc-sub { font-size: 13px; color: var(--suave); }
+.proc-lado { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex-shrink: 0; font-size: 13px; }
+.proc-lado .mini { margin-top: 0; }
+.etq { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; padding: 1px 8px; border-radius: 999px; background: var(--lida-fundo); color: var(--suave); vertical-align: middle; }
+.etq.trabalhista { background: #e8f0fb; color: #2563eb; }
+.etq.previdenciario { background: #efe9fb; color: #7c3aed; }
+.etq.civel { background: #e6f5f2; color: #0f766e; }
+@media (prefers-color-scheme: dark) {
+  .etq.trabalhista { background: #172554; color: #93c5fd; }
+  .etq.previdenciario { background: #2e1065; color: #c4b5fd; }
+  .etq.civel { background: #042f2e; color: #5eead4; }
+}
+#pr-ficha .ficha-barra a.botao-sec { text-decoration: none; color: var(--texto); }
+.ficha-cab { background: var(--painel); border: 1px solid var(--borda); border-radius: 10px; padding: 14px 16px; box-shadow: var(--sombra); margin: 10px 0 14px; }
+.ficha-cab h2 { margin: 0 0 4px; font-family: var(--fonte-titulo); font-weight: 500; font-size: 22px; letter-spacing: .4px; font-variant-numeric: tabular-nums; word-break: break-word; }
+.ficha-cab .linha { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 6px; }
+.ficha-cab a, .tl a, .lin a, #pr-ficha .ficha-aviso a { color: var(--link); }
+.dados { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px 16px; margin-top: 12px; font-size: 14px; }
+.dados > div > span { display: block; font-size: 12px; color: var(--suave); }
+.dados .largo { grid-column: 1 / -1; white-space: pre-wrap; }
+.grade-proc { display: grid; grid-template-columns: 3fr 2fr; gap: 14px; align-items: start; }
+.tl { position: relative; padding-left: 18px; }
+.tl::before { content: ""; position: absolute; left: 5px; top: 4px; bottom: 4px; width: 2px; background: var(--borda); }
+.ev { position: relative; padding: 8px 0 10px; border-bottom: 1px solid var(--borda); }
+.ev:last-child { border-bottom: 0; }
+.ev::before { content: ""; position: absolute; left: -17px; top: 13px; width: 10px; height: 10px; border-radius: 50%; background: var(--cor, var(--suave)); border: 2px solid var(--painel); }
+.ev.futuro { background: var(--lida-fundo); border-radius: 6px; padding-left: 8px; }
+.ev .q { font-size: 12px; color: var(--suave); }
+.ev .q b { color: var(--cor); text-transform: uppercase; font-size: 11px; letter-spacing: .4px; margin-right: 4px; }
+.ev .t { font-size: 14px; margin-top: 2px; word-break: break-word; }
+.anot-texto { white-space: pre-wrap; }
+.filtro-tl { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.filtro-tl button { border: 1px solid var(--borda); background: var(--painel); border-radius: 999px; padding: 3px 12px; font-size: 13px; cursor: pointer; }
+.filtro-tl button[aria-pressed="true"] { background: var(--marca); color: #fff; border-color: var(--marca); }
+.lin { display: flex; justify-content: space-between; gap: 10px; padding: 6px 0; border-top: 1px solid var(--borda); font-size: 14px; align-items: center; }
+.lin:first-of-type { border-top: 0; }
+.lin > span:last-child { text-align: right; }
+textarea.anot { width: 100%; min-height: 70px; padding: 8px 10px; border: 1px solid var(--borda); border-radius: 8px; background: var(--bg); color: var(--texto); resize: vertical; }
+button.escolha { font: inherit; font-size: 14px; }
+.escolha.marcada { border-color: var(--marca); background: var(--lida-fundo); font-weight: 600; }
+@media (max-width: 760px) {
+  .grade-proc { grid-template-columns: 1fr; }
+  .proc { flex-direction: column; }
+  .proc-lado { align-items: flex-start; flex-direction: row; flex-wrap: wrap; }
+  .proc-filtros { grid-template-columns: 1fr 1fr; }
+  .abas { overflow-x: auto; max-width: 100%; }
+}
