@@ -13,7 +13,7 @@ const TIPOS = {
   atendimento: "Atendimento", sustentacao_oral: "Sustentação oral", distribuicao: "Distribuição", financeiro: "Financeiro", outro: "Outro",
 };
 const DIAS_SEMANA = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
-const ABAS = ["publicacoes", "agenda", "atendimento", "processos", "financeiro", "permissoes"];
+const ABAS = ["publicacoes", "agenda", "atendimento", "processos", "tarefas", "financeiro", "permissoes"];
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_CHAVE_PUBLICA);
 const $ = (id) => document.getElementById(id);
@@ -124,6 +124,7 @@ async function iniciar() {
     (pode("atendimento") || pode("financeiro")) && carregarAtendimentos(),
     pode("financeiro") && carregarFinanceiro(),
     pode("processos") && carregarProcessos(),
+    pode("tarefas") && carregarTarefas(),
     pode("permissoes", 3) && carregarPermissoes(),
   ]);
   rotear();
@@ -175,7 +176,7 @@ function rotear() {
   if (fichaAlterada() && !(aba === "atendimento" && id === at.ficha.atendimento.id)) salvarFicha();
   if (estado.eu && estado.equipe.length) mostrar(`tela-${aba}`);
   if (aba !== "agenda" && $("dlg").open) $("dlg").close();
-  if (!["financeiro", "permissoes", "processos"].includes(aba) && $("dlg-fin").open) $("dlg-fin").close();
+  if (!["financeiro", "permissoes", "processos", "tarefas"].includes(aba) && $("dlg-fin").open) $("dlg-fin").close();
   document.querySelectorAll(".abas a").forEach((a) => {
     if (a.dataset.aba === aba) a.setAttribute("aria-current", "page");
     else a.removeAttribute("aria-current");
@@ -187,6 +188,7 @@ function rotear() {
   if (aba === "atendimento") rotearAtendimento(id, extra);
   if (aba === "financeiro") rotearFinanceiro(id, extra);
   if (aba === "processos") rotearProcessos(id);
+  if (aba === "tarefas") rotearTarefas(id);
   if (aba === "permissoes") renderizarPermissoes();
 }
 
@@ -685,5 +687,6 @@ prepararAtendimento();
 prepararFinanceiro();
 prepararPermissoes();
 prepararProcessos();
+prepararTarefas();
 sb.auth.onAuthStateChange((evento) => { if (evento === "SIGNED_IN" && !estado.eu) iniciar(); });
 iniciar();
