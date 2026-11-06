@@ -7,6 +7,7 @@ const AREAS_PERM = [
   { area: "publicacoes", rotulo: "Publicações", niveis: { 0: "Não vê", 1: "Vê", 2: "Vê e marca" } },
   { area: "agenda", rotulo: "Agenda", niveis: { 0: "Não vê", 1: "Vê", 2: "Vê e edita" } },
   { area: "atendimento", rotulo: "Atendimento", niveis: { 0: "Não vê", 1: "Vê", 2: "Preenche", 3: "Preenche e conclui" } },
+  { area: "processos", rotulo: "Processos", niveis: { 0: "Não vê", 1: "Vê", 2: "Vê e edita" } },
   { area: "financeiro", rotulo: "Financeiro", niveis: { 0: "Não vê", 1: "Vê e exporta", 2: "Lança", 3: "Administra" } },
   { area: "permissoes", rotulo: "Permissões", niveis: { 0: "Não", 3: "Administra" } },
 ];
@@ -14,19 +15,19 @@ const AREAS_PERM = [
 const PERFIS = {
   socio: {
     rotulo: "Sócio", descricao: "Tudo, inclusive Financeiro e Permissões.",
-    permissoes: { publicacoes: 2, agenda: 2, atendimento: 3, financeiro: 3, permissoes: 3 },
+    permissoes: { publicacoes: 2, agenda: 2, atendimento: 3, processos: 2, financeiro: 3, permissoes: 3 },
   },
   advogado: {
     rotulo: "Advogado", descricao: "Publicações, Agenda e Atendimento completos. Sem Financeiro.",
-    permissoes: { publicacoes: 2, agenda: 2, atendimento: 3, financeiro: 0, permissoes: 0 },
+    permissoes: { publicacoes: 2, agenda: 2, atendimento: 3, processos: 2, financeiro: 0, permissoes: 0 },
   },
   secretaria: {
     rotulo: "Secretária / estagiário", descricao: "Vê publicações, cuida da agenda e preenche atendimentos.",
-    permissoes: { publicacoes: 1, agenda: 2, atendimento: 2, financeiro: 0, permissoes: 0 },
+    permissoes: { publicacoes: 1, agenda: 2, atendimento: 2, processos: 2, financeiro: 0, permissoes: 0 },
   },
   contador: {
     rotulo: "Contador", descricao: "Só o Financeiro, para ver e exportar.",
-    permissoes: { publicacoes: 0, agenda: 0, atendimento: 0, financeiro: 1, permissoes: 0 },
+    permissoes: { publicacoes: 0, agenda: 0, atendimento: 0, processos: 0, financeiro: 1, permissoes: 0 },
   },
   personalizado: { rotulo: "Personalizado", descricao: "Escolha área por área.", permissoes: null },
 };
