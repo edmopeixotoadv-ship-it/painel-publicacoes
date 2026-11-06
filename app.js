@@ -13,7 +13,7 @@ const TIPOS = {
   atendimento: "Atendimento", sustentacao_oral: "Sustentação oral", distribuicao: "Distribuição", financeiro: "Financeiro", outro: "Outro",
 };
 const DIAS_SEMANA = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
-const ABAS = ["publicacoes", "agenda", "atendimento", "financeiro", "permissoes"];
+const ABAS = ["publicacoes", "agenda", "atendimento", "processos", "financeiro", "permissoes"];
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_CHAVE_PUBLICA);
 const $ = (id) => document.getElementById(id);
@@ -123,6 +123,7 @@ async function iniciar() {
     pode("agenda") && carregarAgenda(),
     (pode("atendimento") || pode("financeiro")) && carregarAtendimentos(),
     pode("financeiro") && carregarFinanceiro(),
+    pode("processos") && carregarProcessos(),
     pode("permissoes", 3) && carregarPermissoes(),
   ]);
   rotear();
@@ -174,7 +175,7 @@ function rotear() {
   if (fichaAlterada() && !(aba === "atendimento" && id === at.ficha.atendimento.id)) salvarFicha();
   if (estado.eu && estado.equipe.length) mostrar(`tela-${aba}`);
   if (aba !== "agenda" && $("dlg").open) $("dlg").close();
-  if (aba !== "financeiro" && aba !== "permissoes" && $("dlg-fin").open) $("dlg-fin").close();
+  if (!["financeiro", "permissoes", "processos"].includes(aba) && $("dlg-fin").open) $("dlg-fin").close();
   document.querySelectorAll(".abas a").forEach((a) => {
     if (a.dataset.aba === aba) a.setAttribute("aria-current", "page");
     else a.removeAttribute("aria-current");
@@ -185,6 +186,7 @@ function rotear() {
   }
   if (aba === "atendimento") rotearAtendimento(id, extra);
   if (aba === "financeiro") rotearFinanceiro(id, extra);
+  if (aba === "processos") rotearProcessos(id);
   if (aba === "permissoes") renderizarPermissoes();
 }
 
@@ -250,6 +252,7 @@ function cartaoPublicacao(p) {
         <label><input type="checkbox" data-campo="lida" ${p.lida ? "checked" : ""} ${marca}> Lida</label>
         <label><input type="checkbox" data-campo="providenciada" ${p.providenciada ? "checked" : ""} ${marca}> Providenciada</label>
         ${pode("agenda", 2) ? `<button class="botao-sec" data-agendar="${esc(p.chave)}">📅 Agendar</button>` : ""}
+        ${linkProcesso(p.processo)}
       </div>
     </div>
     <details>
@@ -266,6 +269,12 @@ function cartaoPublicacao(p) {
       </div>
     </details>
   </article>`;
+}
+
+function linkProcesso(numero) {
+  if (typeof proc === "undefined" || !proc.carregado || !pode("processos")) return "";
+  const p = processoPorNumero(numero);
+  return p ? `<a class="botao-sec" href="#processos/${esc(p.id)}">📁 Processo${p.revisar ? " (a revisar)" : ""}</a>` : "";
 }
 
 async function salvarMarcacao(chave, campo, valor) {
@@ -572,6 +581,7 @@ async function salvarCompromisso(extra = {}) {
   if (location.hash.startsWith("#agenda/")) history.replaceState(null, "", "#agenda");
   renderizarAgenda();
   renderizarPublicacoes();
+  if (abaAtual() === "processos") renderizarProcessos();
   avisar(salvo.google_erro ? `Salvo. Atenção — Google Agenda: ${salvo.google_erro}` : "Compromisso salvo e enviado ao Google Agenda.", 4500);
 }
 
@@ -674,5 +684,6 @@ window.addEventListener("hashchange", rotear);
 prepararAtendimento();
 prepararFinanceiro();
 prepararPermissoes();
+prepararProcessos();
 sb.auth.onAuthStateChange((evento) => { if (evento === "SIGNED_IN" && !estado.eu) iniciar(); });
 iniciar();
