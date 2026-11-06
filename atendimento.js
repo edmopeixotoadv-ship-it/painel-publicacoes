@@ -665,6 +665,7 @@ async function executarAcao(acao, a, extra, projetado) {
   }
   guardarAtendimento(data.atendimento);
   carregarAgenda();
+  if (acao === "distribuir" && pode("processos")) carregarProcessos(); // o banco cria o processo na distribuição
   return data.atendimento;
 }
 
