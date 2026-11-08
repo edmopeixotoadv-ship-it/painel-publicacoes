@@ -77,7 +77,8 @@ const contaPadrao = () => (fin.contas.find((c) => c.ativa && !["poupanca", "cart
 // contas pessoais dos sócios: fora do caixa, do resultado e da reserva de imposto do escritório
 const contaPF = (id) => conta(id)?.tipo === "pf";
 // antecipação de lucro: despesa da empresa; o sócio que recebe fica em conta_destino_id (a conta PF dele)
-const ehAntecipacao = (l) => l.natureza === "despesa" && nomeCategoria(l.categoria_id) === CAT_ANTECIPACAO;
+// só conta como antecipação a saída de uma conta da empresa (saídas lançadas nas contas PF ficam de fora)
+const ehAntecipacao = (l) => l.natureza === "despesa" && nomeCategoria(l.categoria_id) === CAT_ANTECIPACAO && !contaPF(l.conta_id);
 const doEscritorio = (l) => !contaPF(l.conta_id) && !(l.natureza === "transferencia" && contaPF(l.conta_destino_id));
 const emAtraso = (l) => !l.pago_em && l.vencimento < hoje();
 const soma = (lista, f = (l) => l.valor) => centavos(lista.reduce((t, l) => t + Number(f(l) || 0), 0));
@@ -368,7 +369,7 @@ function quadroAntecipacoes(mes, socios) {
       </div>`;
     }).join("")}
     ${semSocio.length ? `<p class="atrasado">${semSocio.length} antecipação(ões) sem sócio indicado (${moeda(soma(semSocio))}): abra o lançamento e escolha o sócio.</p>` : ""}
-    <p class="at-sub">Limite de ${moeda(LIMITE_ANTECIPACAO)} por sócio no mês. Confirme com o contador a forma de cálculo e a retenção.</p>
+    <p class="at-sub">Antecipações que saem das contas da empresa. Limite de ${moeda(LIMITE_ANTECIPACAO)} por sócio no mês; confirme com o contador a forma de cálculo e a retenção.</p>
   </div>`;
 }
 
@@ -821,7 +822,7 @@ function abrirLancamento(l, base = {}) {
         <label>Categoria<select id="fl-categoria">${opcoesCategorias(d.natureza, d.categoria_id)}</select></label>
         <label>Conta<select id="fl-conta">${opcoesContas(d.conta_id)}</select></label>
       </div>
-      <label id="fl-socio-l" ${ehAntecipacao(d) ? "" : "hidden"}>Sócio que recebe
+      <label id="fl-socio-l" ${ehAntecipacao(d) ? "" : "hidden"}>Sócio que recebe (antecipação saindo da conta da empresa)
         <select id="fl-socio">${opcoes(fin.contas.filter((c) => c.tipo === "pf" && (c.ativa || c.id === d.conta_destino_id)).map((c) => [c.id, c.nome]), d.conta_destino_id, "— escolha —")}</select></label>
       <div class="linha2">
         <label>Cliente (opcional)<input id="fl-cliente" list="fin-clientes" maxlength="200" value="${esc(d.cliente_nome || "")}"></label>
@@ -853,14 +854,15 @@ function salvarLancamento(l, d) {
     pago_em: $("fl-pago").value || null,
     categoria_id: $("fl-categoria").value || null,
     conta_id: $("fl-conta").value || null,
-    conta_destino_id: natureza === "despesa" && nomeCategoria($("fl-categoria").value) === CAT_ANTECIPACAO ? ($("fl-socio").value || null) : null,
+    conta_destino_id: natureza === "despesa" && nomeCategoria($("fl-categoria").value) === CAT_ANTECIPACAO && !contaPF($("fl-conta").value)
+      ? ($("fl-socio").value || null) : null,
     cliente_nome: clienteNome || null,
     cliente_id: cliente?.id ?? (clienteNome && clienteNome === d.cliente_nome ? d.cliente_id : null),
     processo: $("fl-processo").value.trim() || null,
     reembolsavel: natureza === "despesa" && $("fl-reembolsavel").checked,
     observacoes: $("fl-obs").value.trim() || null,
   };
-  if (natureza === "despesa" && nomeCategoria(dados.categoria_id) === CAT_ANTECIPACAO && !dados.conta_destino_id) {
+  if (natureza === "despesa" && nomeCategoria(dados.categoria_id) === CAT_ANTECIPACAO && !contaPF(dados.conta_id) && !dados.conta_destino_id) {
     avisar("Escolha o sócio que recebe a antecipação.", 4000);
     return;
   }
@@ -1783,7 +1785,9 @@ function prepararFinanceiro() {
       atualizarPreviaRecebimento();
     }
     if (t.id === "fl-repetir") $("fl-vezes").disabled = !t.value;
-    if (t.id === "fl-categoria" && $("fl-socio-l")) $("fl-socio-l").hidden = nomeCategoria(t.value) !== CAT_ANTECIPACAO;
+    if ((t.id === "fl-categoria" || t.id === "fl-conta") && $("fl-socio-l")) {
+      $("fl-socio-l").hidden = nomeCategoria($("fl-categoria").value) !== CAT_ANTECIPACAO || contaPF($("fl-conta").value);
+    }
     if (t.id === "fp-parcial") atualizarPreviaPagamento();
     if (t.id === "ft-categoria" && !$("ft-descricao").value.trim()) {
       const nome = categoria(t.value)?.nome || "";
