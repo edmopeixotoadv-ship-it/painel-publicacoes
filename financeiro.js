@@ -76,7 +76,7 @@ const contaPoupanca = () => fin.contas.find((c) => c.tipo === "poupanca" && c.at
 const contaPadrao = () => (fin.contas.find((c) => c.ativa && !["poupanca", "cartao", "pf"].includes(c.tipo)) || fin.contas.find((c) => c.ativa && c.tipo !== "pf"))?.id || null;
 // contas pessoais dos sócios: fora do caixa, do resultado e da reserva de imposto do escritório
 const contaPF = (id) => conta(id)?.tipo === "pf";
-// antecipação de lucro: despesa da empresa; o sócio que recebe fica em conta_destino_id (a conta PF dele)
+// antecipação de lucro: despesa da empresa; conta_destino_id só indica o sócio (para o quadro), sem mexer no saldo da PF
 // só conta como antecipação a saída de uma conta da empresa (saídas lançadas nas contas PF ficam de fora)
 const ehAntecipacao = (l) => l.natureza === "despesa" && nomeCategoria(l.categoria_id) === CAT_ANTECIPACAO && !contaPF(l.conta_id);
 const doEscritorio = (l) => !contaPF(l.conta_id) && !(l.natureza === "transferencia" && contaPF(l.conta_destino_id));
@@ -299,6 +299,7 @@ function subLancamento(l) {
   const partes = l.natureza === "transferencia"
     ? [nomeCategoria(l.categoria_id)]
     : [nomeCategoria(l.categoria_id), l.cliente_nome, l.processo && `Proc. ${l.processo}`];
+  if (ehAntecipacao(l) && l.conta_destino_id) partes.push(`sócio: ${nomeConta(l.conta_destino_id).replace(/^PF\s*[—-]\s*/, "")}`);
   if (l.restante_de) partes.push(`saldo de ${l.natureza === "receita" ? "recebimento" : "pagamento"} parcial`);
   if (l.compromisso_id) partes.push("📅 na agenda");
   return partes.filter(Boolean).map(esc).join(" · ");
@@ -310,9 +311,7 @@ function etiquetaConta(l) {
     const c = conta(id);
     return c ? `<span class="etq-conta ${esc(c.tipo)}" title="${esc(TIPOS_CONTA[c.tipo] || "")}">${esc(c.nome)}</span>` : "";
   };
-  if (l.natureza === "transferencia" || (ehAntecipacao(l) && l.conta_destino_id)) {
-    return `${etq(l.conta_id)}<span class="seta-conta">→</span>${etq(l.conta_destino_id)}`;
-  }
+  if (l.natureza === "transferencia") return `${etq(l.conta_id)}<span class="seta-conta">→</span>${etq(l.conta_destino_id)}`;
   return l.conta_id ? etq(l.conta_id) : '<span class="etq-conta sem">sem conta</span>';
 }
 
@@ -337,8 +336,7 @@ function saldosDasContas() {
       + soma(pagos.filter((l) => l.natureza === "receita" && l.conta_id === c.id))
       - soma(pagos.filter((l) => l.natureza === "despesa" && l.conta_id === c.id))
       - soma(pagos.filter((l) => l.natureza === "transferencia" && l.conta_id === c.id))
-      + soma(pagos.filter((l) => l.natureza === "transferencia" && l.conta_destino_id === c.id))
-      + soma(pagos.filter((l) => ehAntecipacao(l) && l.conta_destino_id === c.id && l.conta_id !== c.id));
+      + soma(pagos.filter((l) => l.natureza === "transferencia" && l.conta_destino_id === c.id));
     return { c, saldo: centavos(saldo) };
   }).filter((x) => x.c.ativa || Math.abs(x.saldo) > 0.004);
 }
@@ -391,8 +389,7 @@ function telaGeral(mes, doMes) {
   const todas = saldosDasContas();
   const contas = todas.filter((x) => x.c.tipo !== "pf");
   const pessoais = todas.filter((x) => x.c.tipo === "pf");
-  const mesPF = (c) => soma(fin.lancamentos.filter((l) => l.pago_em?.startsWith(mes) &&
-    ((l.conta_id === c.id && l.natureza === "receita") || (ehAntecipacao(l) && l.conta_destino_id === c.id))));
+  const mesPF = (c) => soma(fin.lancamentos.filter((l) => l.conta_id === c.id && l.natureza === "receita" && l.pago_em?.startsWith(mes)));
   const semConta = fin.lancamentos.filter((l) => l.pago_em && !l.conta_id && l.natureza !== "transferencia").length;
   const poup = contaPoupanca();
 
