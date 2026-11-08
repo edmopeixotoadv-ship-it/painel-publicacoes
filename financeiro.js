@@ -233,18 +233,29 @@ function renderizarFinanceiro() {
   const doAnterior = pagosNo(anterior);
   const resultadoAnterior = soma(doAnterior.filter((l) => l.natureza === "receita"), valorResultado) -
     soma(doAnterior.filter((l) => l.natureza === "despesa"), valorResultado);
-  const foraEntradas = centavos(soma(receitas) - entradas), foraSaidas = centavos(soma(despesas) - saidas);
+  // caixa = tudo o que entrou e saiu; escritório = só o que entra no resultado
+  const caixaEntradas = soma(receitas), caixaSaidas = soma(despesas);
+  const deClientes = soma(receitas.filter((l) => registroDoTotal(l)), (l) => Number(l.valor) - valorResultado(l));
+  const outrasEntradas = centavos(caixaEntradas - entradas - deClientes);
+  const repasses = soma(despesas.filter((l) => registroDoRepasse(l) || nomeCategoria(l.categoria_id) === "Repasse ao Cliente"));
+  const outrasSaidas = centavos(caixaSaidas - saidas - repasses);
+  const saldoCaixa = centavos(caixaEntradas - caixaSaidas);
+  const detalhe = (partes) => partes.filter(([v]) => Math.abs(v) > 0.004).map(([v, r]) => `${moedaCurta(v)} ${r}`).join("<br>");
   const aReceber = fin.lancamentos.filter((l) => l.natureza === "receita" && !l.pago_em);
   const atrasadas = aReceber.filter(emAtraso);
 
   $("fin-mes").textContent = nomeMes(mes);
-  $("fin-n-entradas").textContent = moedaCurta(entradas);
-  $("fin-r-entradas").textContent = foraEntradas ? `+ ${moedaCurta(foraEntradas)} só de caixa` : `${receitas.length} lançamento(s)`;
-  $("fin-n-saidas").textContent = moedaCurta(saidas);
-  $("fin-r-saidas").textContent = foraSaidas ? `+ ${moedaCurta(foraSaidas)} só de caixa` : `${despesas.length} lançamento(s)`;
+  $("fin-n-entradas").textContent = moedaCurta(caixaEntradas);
+  $("fin-r-entradas").innerHTML = detalhe([[entradas, "do escritório"], [outrasEntradas, "empréstimos e outros"], [deClientes, "de clientes"]]) || "nenhuma entrada";
+  $("fin-n-saidas").textContent = moedaCurta(caixaSaidas);
+  $("fin-r-saidas").innerHTML = detalhe([[saidas, "do escritório"], [repasses, "repasses a clientes"], [outrasSaidas, "retiradas e outros"]]) || "nenhuma saída";
+  $("fin-n-caixa").textContent = moedaCurta(saldoCaixa);
+  $("fin-n-caixa").className = `n ${saldoCaixa > 0 ? "pos" : saldoCaixa < 0 ? "neg" : ""}`;
+  $("fin-r-caixa").textContent = "entradas menos saídas";
   $("fin-n-resultado").textContent = moedaCurta(resultado);
   $("fin-n-resultado").className = `n ${resultado > 0 ? "pos" : resultado < 0 ? "neg" : ""}`;
-  $("fin-r-resultado").textContent = doAnterior.length ? `${nomeMes(anterior).split(" ")[0]}: ${moedaCurta(resultadoAnterior)}` : "";
+  $("fin-r-resultado").innerHTML = `${moedaCurta(entradas)} − ${moedaCurta(saidas)}` +
+    (doAnterior.length ? `<br>${nomeMes(anterior).split(" ")[0]}: ${moedaCurta(resultadoAnterior)}` : "");
   $("fin-n-receber").textContent = moedaCurta(soma(aReceber));
   $("fin-r-receber").innerHTML = atrasadas.length
     ? `<span class="atrasado">${moedaCurta(soma(atrasadas))} em atraso</span>` : `${aReceber.length} em aberto`;
