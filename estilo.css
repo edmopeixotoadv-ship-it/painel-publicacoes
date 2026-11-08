@@ -476,3 +476,7 @@ button.escolha { font: inherit; font-size: 14px; }
 .abas .contador { display: inline-block; min-width: 18px; padding: 0 5px; border-radius: 999px; background: var(--perigo); color: #fff; font-size: 11px; font-family: -apple-system, sans-serif; letter-spacing: 0; text-align: center; line-height: 18px; vertical-align: 1px; }
 @media (max-width: 900px) { .quadro { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 560px) { .quadro { grid-template-columns: 1fr; } .tf-filtros { grid-template-columns: 1fr 1fr; } }
+/* financeiro: cinco cartões (caixa e escritório) */
+#tela-financeiro .resumo { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+#tela-financeiro .cartao-num .r small { line-height: 1.4; margin-top: 2px; }
+@media (max-width: 900px) { #tela-financeiro .resumo { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
