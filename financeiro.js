@@ -292,11 +292,21 @@ function botaoPagar(l, curto = false) {
 
 function subLancamento(l) {
   const partes = l.natureza === "transferencia"
-    ? [`${nomeConta(l.conta_id)} → ${nomeConta(l.conta_destino_id)}`]
+    ? [nomeCategoria(l.categoria_id)]
     : [nomeCategoria(l.categoria_id), l.cliente_nome, l.processo && `Proc. ${l.processo}`];
   if (l.restante_de) partes.push(`saldo de ${l.natureza === "receita" ? "recebimento" : "pagamento"} parcial`);
   if (l.compromisso_id) partes.push("📅 na agenda");
   return partes.filter(Boolean).map(esc).join(" · ");
+}
+
+// etiqueta colorida com a conta do lançamento (transferência: origem → destino)
+function etiquetaConta(l) {
+  const etq = (id) => {
+    const c = conta(id);
+    return c ? `<span class="etq-conta ${esc(c.tipo)}" title="${esc(TIPOS_CONTA[c.tipo] || "")}">${esc(c.nome)}</span>` : "";
+  };
+  if (l.natureza === "transferencia") return `${etq(l.conta_id)}<span class="seta-conta">→</span>${etq(l.conta_destino_id)}`;
+  return l.conta_id ? etq(l.conta_id) : '<span class="etq-conta sem">sem conta</span>';
 }
 
 function itemVencimento(l) {
@@ -306,6 +316,7 @@ function itemVencimento(l) {
       <span class="d">${dataBR(l.vencimento).slice(0, 5)}</span>
       <span class="t"><b>${esc(l.descricao)}</b><span>${subLancamento(l)}</span></span>
     </a>
+    ${etiquetaConta(l)}
     ${emAtraso(l) ? '<span class="selo-at atrasado">em atraso</span>' : ""}
     <span class="valor ${classeValor(l)}">${moeda(l.valor)}</span>
     ${botaoPagar(l, true)}
@@ -426,12 +437,11 @@ function renderizarTabelaLancamentos() {
   $("fl-contagem").textContent = `${lista.length} lançamento(s) · receitas ${moeda(rec)} · despesas ${moeda(desp)}`;
   $("fl-corpo").innerHTML = lista.length ? lista.map((l) => {
     const sub = [l.cliente_nome, l.processo && `Proc. ${l.processo}`, l.reembolsavel && "reembolsável"].filter(Boolean).map(esc).join(" · ");
-    const contaTxt = l.natureza === "transferencia" ? `${nomeConta(l.conta_id)} → ${nomeConta(l.conta_destino_id)}` : nomeConta(l.conta_id);
     const sinal = l.natureza === "despesa" ? "− " : "";
     return `<tr class="clicavel" data-ir="#financeiro/lancamento/${esc(l.id)}">
       <td>${dataBR(l.pago_em || l.vencimento).slice(0, 5)}</td>
       <td><a href="#financeiro/lancamento/${esc(l.id)}">${esc(l.descricao)}</a>${sub ? `<span class="at-sub" style="display:block">${sub}</span>` : ""}</td>
-      <td>${esc(nomeCategoria(l.categoria_id))}</td><td>${esc(contaTxt)}</td><td>${seloSituacao(l)}</td>
+      <td>${esc(nomeCategoria(l.categoria_id))}</td><td>${etiquetaConta(l)}</td><td>${seloSituacao(l)}</td>
       <td class="num valor ${classeValor(l)}">${sinal}${moeda(l.valor)}</td>
       <td>${botaoEditar(l)}</td></tr>`;
   }).join("") : '<tr><td colspan="7"><div class="vazio pequeno">Nenhum lançamento neste mês com esses filtros.</div></td></tr>';
@@ -444,14 +454,43 @@ function itemPendente(l) {
       <span class="at-data">${dataBR(l.vencimento)}</span>
       <span class="at-info"><span class="at-titulo">${esc(l.descricao)}</span><span class="at-sub">${subLancamento(l)}</span></span>
     </a>
-    <span class="at-acoes"><span class="valor ${classeValor(l)}">${moeda(l.valor)}</span>
+    <span class="at-acoes"><span class="linha-conta">${etiquetaConta(l)}<span class="valor ${classeValor(l)}">${moeda(l.valor)}</span></span>
       <span class="acoes-linha">${botaoEditar(l)}${botaoPagar(l)}</span></span>
   </div>`;
 }
 
+// período de vencimento usado em "A receber" e "A pagar" (vazio = tudo em aberto)
+function atalhoPeriodo(tipo) {
+  const h = hoje(), mes = h.slice(0, 7), fimMes = somarDias(somarMeses(`${mes}-01`, 1), -1);
+  const prox = somarMeses(`${mes}-01`, 1);
+  return {
+    hoje: [h, h], semana: [h, somarDias(h, 6)], quinzena: [h, somarDias(h, 14)],
+    mes: [`${mes}-01`, fimMes], proximo: [prox, somarDias(somarMeses(prox, 1), -1)], todos: ["", ""],
+  }[tipo];
+}
+
+function barraPeriodo() {
+  const { de = "", ate = "" } = fin.periodo || {};
+  const botoes = [["hoje", "Hoje"], ["semana", "Próximos 7 dias"], ["quinzena", "Próximos 15 dias"],
+    ["mes", "Este mês"], ["proximo", "Próximo mês"], ["todos", "Tudo"]];
+  const ativo = botoes.find(([t]) => { const [a, b] = atalhoPeriodo(t); return a === de && b === ate; })?.[0];
+  return `
+  <div class="fin-periodo">
+    <label>Vencimento de<input type="date" id="fp-de" value="${esc(de)}"></label>
+    <label>até<input type="date" id="fp-ate" value="${esc(ate)}"></label>
+    <div class="fin-sub atalhos">${botoes.map(([t, r]) => `<button type="button" data-periodo="${t}" aria-pressed="${ativo === t}">${r}</button>`).join("")}</div>
+  </div>`;
+}
+
+function noPeriodo(l) {
+  const { de, ate } = fin.periodo || {};
+  return (!de || l.vencimento >= de) && (!ate || l.vencimento <= ate);
+}
+
 function telaPendentes(natureza) {
-  const lista = fin.lancamentos.filter((l) => l.natureza === natureza && !l.pago_em)
+  const lista = fin.lancamentos.filter((l) => l.natureza === natureza && !l.pago_em && noPeriodo(l))
     .sort((a, b) => a.vencimento.localeCompare(b.vencimento));
+  const filtrado = !!(fin.periodo?.de || fin.periodo?.ate);
   const fimMes = somarMeses(`${hoje().slice(0, 7)}-01`, 1);
   const repasse = (l) => !!registroDoRepasse(l);
   const grupos = [
@@ -463,16 +502,19 @@ function telaPendentes(natureza) {
   // resgates da poupança (dinheiro que volta para a conta do escritório) aparecem em "A receber"
   if (natureza === "receita") {
     grupos.push(["Resgates programados da poupança", fin.lancamentos
-      .filter((l) => l.natureza === "transferencia" && !l.pago_em && l.conta_id === contaPoupanca()?.id)
+      .filter((l) => l.natureza === "transferencia" && !l.pago_em && l.conta_id === contaPoupanca()?.id && noPeriodo(l))
       .sort((a, b) => a.vencimento.localeCompare(b.vencimento))]);
   }
   const visiveis = grupos.filter(([, g]) => g.length);
+  const periodo = filtrado
+    ? ` com vencimento ${fin.periodo.de && fin.periodo.ate ? `de ${dataBR(fin.periodo.de)} a ${dataBR(fin.periodo.ate)}` : fin.periodo.de ? `a partir de ${dataBR(fin.periodo.de)}` : `até ${dataBR(fin.periodo.ate)}`}` : "";
   return `
-  <p class="contagem">${lista.length} em aberto · total ${moeda(soma(lista))}</p>
+  ${barraPeriodo()}
+  <p class="contagem total-periodo"><strong>${lista.length} ${natureza === "receita" ? "a receber" : "a pagar"}${periodo}</strong> · total <strong>${moeda(soma(lista))}</strong></p>
   ${visiveis.length ? visiveis.map(([titulo, g]) => `
     <h3 class="fin-grupo">${titulo} · ${moeda(soma(g))}</h3>
     <div class="lista">${g.map(itemPendente).join("")}</div>`).join("")
-    : `<div class="vazio">Nada ${natureza === "receita" ? "a receber" : "a pagar"} em aberto.</div>`}`;
+    : `<div class="vazio">Nada ${natureza === "receita" ? "a receber" : "a pagar"} em aberto${filtrado ? " nesse período" : ""}.</div>`}`;
 }
 
 function resumoContrato(c) {
@@ -1593,11 +1635,22 @@ function prepararFinanceiro() {
 
   const conteudo = $("fin-conteudo");
   conteudo.addEventListener("input", (e) => { if (e.target.id === "fl-busca") renderizarTabelaLancamentos(); });
-  conteudo.addEventListener("change", (e) => { if (/^fl-f-/.test(e.target.id)) renderizarTabelaLancamentos(); });
+  conteudo.addEventListener("change", (e) => {
+    if (/^fl-f-/.test(e.target.id)) renderizarTabelaLancamentos();
+    if (e.target.id === "fp-de" || e.target.id === "fp-ate") {
+      fin.periodo = { de: $("fp-de").value, ate: $("fp-ate").value };
+      if (fin.periodo.de && fin.periodo.ate && fin.periodo.ate < fin.periodo.de) fin.periodo.ate = fin.periodo.de;
+      renderizarFinanceiro();
+    }
+  });
   conteudo.addEventListener("click", (e) => {
     const t = e.target.closest("button, a, tr[data-ir]");
     if (!t) return;
-    if (t.dataset.pagar) abrirPagamento(fin.lancamentos.find((l) => l.id === t.dataset.pagar));
+    if (t.dataset.periodo) {
+      const [de, ate] = atalhoPeriodo(t.dataset.periodo);
+      fin.periodo = { de, ate };
+      renderizarFinanceiro();
+    } else if (t.dataset.pagar) abrirPagamento(fin.lancamentos.find((l) => l.id === t.dataset.pagar));
     else if (t.dataset.novoContrato !== undefined) abrirContrato(null);
     else if (t.dataset.novoRecebimento) abrirRecebimento(null, { origem: t.dataset.novoRecebimento });
     else if (t.dataset.salvarConta) salvarConfig("fin_contas", t.dataset.salvarConta, t.closest("tr"));
