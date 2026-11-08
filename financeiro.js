@@ -449,7 +449,7 @@ function lancamentosDoMes() {
   return fin.lancamentos.filter((l) => l.pago_em?.startsWith(mes) || (!l.pago_em && l.vencimento.startsWith(mes)));
 }
 
-function seloSituacao(l) {
+function seloLancamento(l) {
   if (l.pago_em && fin.lancamentos.some((x) => x.restante_de === l.id && !x.pago_em)) {
     return `<span class="selo-at aguardando_distribuicao">${l.natureza === "receita" ? "recebido" : "pago"} parcial</span>`;
   }
@@ -478,7 +478,7 @@ function renderizarTabelaLancamentos() {
     return `<tr class="clicavel" data-ir="#financeiro/lancamento/${esc(l.id)}">
       <td>${dataBR(l.pago_em || l.vencimento).slice(0, 5)}</td>
       <td><a href="#financeiro/lancamento/${esc(l.id)}">${esc(l.descricao)}</a>${sub ? `<span class="at-sub" style="display:block">${sub}</span>` : ""}</td>
-      <td>${esc(nomeCategoria(l.categoria_id))}</td><td>${etiquetaConta(l)}</td><td>${seloSituacao(l)}</td>
+      <td>${esc(nomeCategoria(l.categoria_id))}</td><td>${etiquetaConta(l)}</td><td>${seloLancamento(l)}</td>
       <td class="num valor ${classeValor(l)}">${sinal}${moeda(l.valor)}</td>
       <td>${botaoEditar(l)}</td></tr>`;
   }).join("") : '<tr><td colspan="7"><div class="vazio pequeno">Nenhum lançamento neste mês com esses filtros.</div></td></tr>';
@@ -1217,7 +1217,7 @@ function abrirContrato(c, atendimento) {
           <span class="rotulo">Recebido neste contrato: <strong>${moeda(r.recebido)}</strong></span>
           ${outros.length ? `<table class="fin mini"><tbody>${outros.sort((a, b) => a.vencimento.localeCompare(b.vencimento)).map((l) => `
             <tr><td>${dataBR(l.vencimento)}</td><td><a href="#financeiro/lancamento/${esc(l.id)}">${esc(l.descricao)}</a></td>
-            <td class="num valor">${moeda(l.valor)}</td><td>${seloSituacao(l)}</td></tr>`).join("")}</tbody></table>` : ""}
+            <td class="num valor">${moeda(l.valor)}</td><td>${seloLancamento(l)}</td></tr>`).join("")}</tbody></table>` : ""}
           ${pode("financeiro", 2) ? `<div class="acoes-dlg">
             ${["exito", "fixo_exito"].includes(d.tipo) ? `<button type="button" class="botao-sec mini" data-exito="${esc(c.id)}">+ Recebimento de êxito</button>
             <button type="button" class="botao-sec mini" data-recebimento-contrato="${esc(c.id)}">+ Alvará ou acordo deste contrato</button>` : ""}
