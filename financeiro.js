@@ -30,7 +30,7 @@ const fin = {
 // ------------------------------------------------------------- utilidades
 
 const formatoMoeda = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
-const formatoMoedaCurta = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL", maximumFractionDigits: 0 });
+const formatoMoedaCurta = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL", minimumFractionDigits: 2, maximumFractionDigits: 2 });
 function moeda(v) { return formatoMoeda.format(Number(v || 0)); }
 function moedaCurta(v) { return formatoMoedaCurta.format(Number(v || 0)); }
 const centavos = (v) => Math.round(Number(v || 0) * 100) / 100;
