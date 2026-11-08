@@ -353,6 +353,8 @@ function renderizarFicha(p) {
 function abrirProcesso(p) {
   const novo = !p;
   const d = p || { fase: "conhecimento", responsaveis: [estado.eu], partes_contrarias: [], partes_publicacao: [] };
+  // na revisão, quem está revisando já vem como responsável
+  const responsaveis = d.revisar && !d.responsaveis?.length ? [estado.eu] : d.responsaveis || [];
   const partes = (d.partes_publicacao || []).map(lerParte);
   abrirDialogo({
     titulo: novo ? "Novo processo" : d.revisar ? "Revisar processo" : "Editar processo",
@@ -390,8 +392,9 @@ function abrirProcesso(p) {
       </div>
       <div><span class="rotulo">Responsáveis</span>
         <div class="responsaveis" id="pp-resp">${estado.equipe.map((x) =>
-          `<label class="check"><input type="checkbox" value="${esc(x.email)}" ${(d.responsaveis || []).includes(x.email) ? "checked" : ""}> ${esc(x.nome || x.email)}</label>`).join("")}</div></div>
+          `<label class="check"><input type="checkbox" value="${esc(x.email)}" ${responsaveis.includes(x.email) ? "checked" : ""}> ${esc(x.nome || x.email)}</label>`).join("")}</div></div>
       <label>Observações<textarea id="pp-obs" rows="2">${esc(d.observacoes || "")}</textarea></label>
+      <div class="erro-dlg" id="pp-erro" hidden></div>
       ${rodapeAutoria(p)}`,
   });
   proc.editando = d;
@@ -412,9 +415,21 @@ function salvarProcesso(p, d) {
   const clienteNome = $("pp-cliente").value.trim();
   const responsaveis = [...$("pp-resp").querySelectorAll("input:checked")].map((i) => i.value);
   const area = $("pp-area").value || null;
-  if (d.revisar && (!clienteNome || !area || !responsaveis.length)) {
-    avisar("Para concluir a revisão, informe cliente, área e pelo menos um responsável.", 4000);
-    return;
+  document.querySelectorAll(".campo-faltando").forEach((el) => el.classList.remove("campo-faltando"));
+  if (d.revisar) {
+    const faltam = [
+      !clienteNome && ["cliente", $("pp-cliente")],
+      !area && ["área", $("pp-area")],
+      !responsaveis.length && ["responsável", $("pp-resp")],
+    ].filter(Boolean);
+    if (faltam.length) {
+      faltam.forEach(([, el]) => el.classList.add("campo-faltando"));
+      $("pp-erro").hidden = false;
+      $("pp-erro").textContent = `Para concluir a revisão, falta informar: ${faltam.map(([n]) => n).join(", ")}.`;
+      $("pp-erro").scrollIntoView({ block: "nearest" });
+      faltam[0][1].focus?.();
+      return;
+    }
   }
   const valor = lerValor($("pp-valor").value);
   const dados = {
@@ -451,7 +466,7 @@ function salvarProcesso(p, d) {
     guardar(proc.lista, salvo);
     if (novo) location.hash = `#processos/${salvo.id}`;
     return null;
-  }, d.revisar ? "Revisão concluída." : "Processo salvo.");
+  }, d.revisar ? "Revisão concluída — o processo foi para “Ativos”." : "Processo salvo.");
 }
 
 function excluirProcesso(p) {
