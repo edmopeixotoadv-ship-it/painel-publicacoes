@@ -10,7 +10,7 @@ const SUBS_FIN = {
   geral: "Visão geral", lancamentos: "Lançamentos", receber: "A receber", pagar: "A pagar",
   honorarios: "Honorários", alvaras: "Alvarás e acordos", config: "Configurações",
 };
-const TIPOS_CONTA = { banco: "Banco", poupanca: "Poupança", caixa: "Caixa", cartao: "Cartão de crédito", outro: "Outro" };
+const TIPOS_CONTA = { banco: "Banco", poupanca: "Poupança", caixa: "Caixa", cartao: "Cartão de crédito", pf: "Pessoa física (sócio)", outro: "Outro" };
 const TIPOS_CONTRATO = { fixo: "Parcelado", mensal: "Fixo mensal", exito: "Êxito", fixo_exito: "Parcelado + êxito" };
 const SITUACOES_CONTRATO = { ativo: "Ativo", encerrado: "Encerrado", cancelado: "Cancelado" };
 const NATUREZAS = { receita: "Receita", despesa: "Despesa", transferencia: "Transferência" };
@@ -71,7 +71,10 @@ const categoriaPorNome = (nome, natureza) =>
   fin.categorias.find((c) => c.nome === nome && c.natureza === natureza) ||
   fin.categorias.find((c) => c.natureza === natureza && c.ativa);
 const contaPoupanca = () => fin.contas.find((c) => c.tipo === "poupanca" && c.ativa);
-const contaPadrao = () => (fin.contas.find((c) => c.ativa && !["poupanca", "cartao"].includes(c.tipo)) || fin.contas.find((c) => c.ativa))?.id || null;
+const contaPadrao = () => (fin.contas.find((c) => c.ativa && !["poupanca", "cartao", "pf"].includes(c.tipo)) || fin.contas.find((c) => c.ativa && c.tipo !== "pf"))?.id || null;
+// contas pessoais dos sócios: fora do caixa, do resultado e da reserva de imposto do escritório
+const contaPF = (id) => conta(id)?.tipo === "pf";
+const doEscritorio = (l) => !contaPF(l.conta_id) && !(l.natureza === "transferencia" && contaPF(l.conta_destino_id));
 const emAtraso = (l) => !l.pago_em && l.vencimento < hoje();
 const soma = (lista, f = (l) => l.valor) => centavos(lista.reduce((t, l) => t + Number(f(l) || 0), 0));
 const registroDoTotal = (l) => fin.alvaras.find((a) => a.lancamento_id === l.id);
@@ -88,6 +91,7 @@ function valorResultado(l) {
 
 // base da reserva de imposto: só a parte do escritório, recebida a partir da data de início da reserva
 function baseImposto(l) {
+  if (contaPF(l.conta_id)) return 0; // recebido na pessoa física do sócio: sem reserva automática
   if (l.natureza !== "receita" || !l.pago_em || l.pago_em < (fin.config?.reserva_desde || "9999")) return 0;
   const reg = registroDoTotal(l);
   if (reg) return Number(reg.honorarios);
@@ -224,7 +228,7 @@ function renderizarFinanceiro() {
   if (!fin.carregado) return;
   const mes = fin.mes || hoje().slice(0, 7);
   const anterior = somarMeses(`${mes}-01`, -1).slice(0, 7);
-  const pagosNo = (m) => fin.lancamentos.filter((l) => l.pago_em?.startsWith(m) && l.natureza !== "transferencia");
+  const pagosNo = (m) => fin.lancamentos.filter((l) => l.pago_em?.startsWith(m) && l.natureza !== "transferencia" && doEscritorio(l));
   const doMes = pagosNo(mes);
   const receitas = doMes.filter((l) => l.natureza === "receita");
   const despesas = doMes.filter((l) => l.natureza === "despesa");
@@ -241,7 +245,7 @@ function renderizarFinanceiro() {
   const outrasSaidas = centavos(caixaSaidas - saidas - repasses);
   const saldoCaixa = centavos(caixaEntradas - caixaSaidas);
   const detalhe = (partes) => partes.filter(([v]) => Math.abs(v) > 0.004).map(([v, r]) => `${moedaCurta(v)} ${r}`).join("<br>");
-  const aReceber = fin.lancamentos.filter((l) => l.natureza === "receita" && !l.pago_em);
+  const aReceber = fin.lancamentos.filter((l) => l.natureza === "receita" && !l.pago_em && doEscritorio(l));
   const atrasadas = aReceber.filter(emAtraso);
 
   $("fin-mes").textContent = nomeMes(mes);
@@ -335,7 +339,10 @@ function telaGeral(mes, doMes) {
   const linhas = [...porCategoria.entries()].map(([k, v]) => ({ natureza: k.split("|")[0], categoria: k.split("|")[1], v }))
     .sort((a, b) => (a.natureza === b.natureza ? b.v - a.v : a.natureza === "receita" ? -1 : 1));
   const maior = Math.max(1, ...linhas.map((x) => x.v));
-  const contas = saldosDasContas();
+  const todas = saldosDasContas();
+  const contas = todas.filter((x) => x.c.tipo !== "pf");
+  const pessoais = todas.filter((x) => x.c.tipo === "pf");
+  const mesPF = (c) => soma(fin.lancamentos.filter((l) => l.conta_id === c.id && l.natureza === "receita" && l.pago_em?.startsWith(mes)));
   const semConta = fin.lancamentos.filter((l) => l.pago_em && !l.conta_id && l.natureza !== "transferencia").length;
   const poup = contaPoupanca();
 
@@ -363,6 +370,12 @@ function telaGeral(mes, doMes) {
         ${semConta ? `<p class="at-sub">${semConta} lançamento(s) pago(s) sem conta não entram nos saldos.</p>` : ""}
         ${pode("financeiro", 3) ? '<p class="at-sub">Saldo inicial, contas e percentual em <a href="#financeiro/config">Configurações</a>.</p>' : ""}
       </div>
+      ${pessoais.length ? `<div class="bloco">
+        <h3>Contas pessoais dos sócios</h3>
+        ${pessoais.map((x) => `<div class="conta"><span>${esc(x.c.nome)}<br><span class="at-sub">recebido em ${esc(nomeMes(mes).split(" ")[0])}: ${moeda(mesPF(x.c))}</span></span>
+          <span class="valor ${x.saldo < 0 ? "desp" : ""}">${moeda(x.saldo)}</span></div>`).join("")}
+        <p class="at-sub">Valores recebidos na pessoa física: não entram no caixa, no resultado nem na reserva de imposto do escritório.</p>
+      </div>` : ""}
     </div>
   </div>`;
 }
