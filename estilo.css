@@ -507,3 +507,13 @@ button.escolha { font: inherit; font-size: 14px; }
 .seta-conta { color: var(--suave); margin: 0 3px; font-size: 12px; }
 .linha-conta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
 table.fin td .etq-conta { margin: 1px 0; }
+/* antecipação de lucros: alerta do limite mensal */
+.antecip { padding: 8px 0; border-top: 1px solid var(--borda); }
+.antecip:first-of-type { border-top: 0; }
+.antecip-cab { display: flex; justify-content: space-between; gap: 10px; font-size: 14px; }
+.antecip .trilho { background: var(--lida-fundo); border-radius: 4px; height: 10px; overflow: hidden; margin: 5px 0 3px; }
+.antecip .trilho i { display: block; height: 100%; border-radius: 4px; background: var(--ok); }
+.antecip.atencao .trilho i { background: var(--nova); }
+.antecip.acima .trilho i { background: var(--perigo); }
+.antecip.atencao .at-sub:last-child { color: var(--nova); font-weight: 600; }
+.antecip.acima .at-sub:last-child, .antecip.acima .antecip-cab .valor { color: var(--perigo); font-weight: 600; }
