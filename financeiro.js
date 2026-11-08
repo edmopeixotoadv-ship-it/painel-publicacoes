@@ -15,7 +15,9 @@ const TIPOS_CONTRATO = { fixo: "Parcelado", mensal: "Fixo mensal", exito: "Êxit
 const SITUACOES_CONTRATO = { ativo: "Ativo", encerrado: "Encerrado", cancelado: "Cancelado" };
 const NATUREZAS = { receita: "Receita", despesa: "Despesa", transferencia: "Transferência" };
 const ORIGENS = { alvara: "Alvará judicial", acordo: "Acordo" };
-const MESES_MENSAL = 12; // contratos fixos mensais ficam sempre com 12 meses lançados à frente
+const MESES_MENSAL = 12;
+const CAT_ANTECIPACAO = "Antecipação de lucro ao sócio";
+const LIMITE_ANTECIPACAO = 50000; // por sócio e por mês: acima disso há retenção de 10% de IR (reforma do IR, 2026) // contratos fixos mensais ficam sempre com 12 meses lançados à frente
 
 const fin = {
   contas: [], categorias: [], lancamentos: [], contratos: [], alvaras: [], config: null,
@@ -74,6 +76,8 @@ const contaPoupanca = () => fin.contas.find((c) => c.tipo === "poupanca" && c.at
 const contaPadrao = () => (fin.contas.find((c) => c.ativa && !["poupanca", "cartao", "pf"].includes(c.tipo)) || fin.contas.find((c) => c.ativa && c.tipo !== "pf"))?.id || null;
 // contas pessoais dos sócios: fora do caixa, do resultado e da reserva de imposto do escritório
 const contaPF = (id) => conta(id)?.tipo === "pf";
+// antecipação de lucro: despesa da empresa; o sócio que recebe fica em conta_destino_id (a conta PF dele)
+const ehAntecipacao = (l) => l.natureza === "despesa" && nomeCategoria(l.categoria_id) === CAT_ANTECIPACAO;
 const doEscritorio = (l) => !contaPF(l.conta_id) && !(l.natureza === "transferencia" && contaPF(l.conta_destino_id));
 const emAtraso = (l) => !l.pago_em && l.vencimento < hoje();
 const soma = (lista, f = (l) => l.valor) => centavos(lista.reduce((t, l) => t + Number(f(l) || 0), 0));
@@ -305,7 +309,9 @@ function etiquetaConta(l) {
     const c = conta(id);
     return c ? `<span class="etq-conta ${esc(c.tipo)}" title="${esc(TIPOS_CONTA[c.tipo] || "")}">${esc(c.nome)}</span>` : "";
   };
-  if (l.natureza === "transferencia") return `${etq(l.conta_id)}<span class="seta-conta">→</span>${etq(l.conta_destino_id)}`;
+  if (l.natureza === "transferencia" || (ehAntecipacao(l) && l.conta_destino_id)) {
+    return `${etq(l.conta_id)}<span class="seta-conta">→</span>${etq(l.conta_destino_id)}`;
+  }
   return l.conta_id ? etq(l.conta_id) : '<span class="etq-conta sem">sem conta</span>';
 }
 
@@ -330,9 +336,40 @@ function saldosDasContas() {
       + soma(pagos.filter((l) => l.natureza === "receita" && l.conta_id === c.id))
       - soma(pagos.filter((l) => l.natureza === "despesa" && l.conta_id === c.id))
       - soma(pagos.filter((l) => l.natureza === "transferencia" && l.conta_id === c.id))
-      + soma(pagos.filter((l) => l.natureza === "transferencia" && l.conta_destino_id === c.id));
+      + soma(pagos.filter((l) => l.natureza === "transferencia" && l.conta_destino_id === c.id))
+      + soma(pagos.filter((l) => ehAntecipacao(l) && l.conta_destino_id === c.id && l.conta_id !== c.id));
     return { c, saldo: centavos(saldo) };
   }).filter((x) => x.c.ativa || Math.abs(x.saldo) > 0.004);
+}
+
+// antecipações de lucro do mês por sócio, com alerta do limite mensal
+function quadroAntecipacoes(mes, socios) {
+  const doMes = fin.lancamentos.filter((l) => ehAntecipacao(l) && (l.pago_em || l.vencimento).startsWith(mes));
+  if (!socios.length && !doMes.length) return "";
+  const linhas = socios.map((c) => {
+    const meus = doMes.filter((l) => l.conta_destino_id === c.id);
+    return { nome: c.nome.replace(/^PF\s*[—-]\s*/, ""), pago: soma(meus.filter((l) => l.pago_em)), programado: soma(meus.filter((l) => !l.pago_em)) };
+  });
+  const semSocio = doMes.filter((l) => !l.conta_destino_id || !socios.some((c) => c.id === l.conta_destino_id));
+  const nomeM = nomeMes(mes).split(" ")[0];
+  return `
+  <div class="bloco">
+    <h3>Antecipação de lucros · ${esc(nomeM)}</h3>
+    ${linhas.map((x) => {
+      const total = x.pago + x.programado;
+      const pct = Math.round((100 * total) / LIMITE_ANTECIPACAO);
+      const nivel = total > LIMITE_ANTECIPACAO ? "acima" : pct >= 80 ? "atencao" : "ok";
+      const aviso = nivel === "acima" ? `acima do limite em ${moeda(total - LIMITE_ANTECIPACAO)} — retenção de 10% de IR`
+        : nivel === "atencao" ? `atenção: restam ${moeda(LIMITE_ANTECIPACAO - total)}` : `restam ${moeda(LIMITE_ANTECIPACAO - total)}`;
+      return `<div class="antecip ${nivel}">
+        <div class="antecip-cab"><b>${esc(x.nome)}</b><span class="valor">${moeda(total)} <span class="at-sub">de ${moedaCurta(LIMITE_ANTECIPACAO)}</span></span></div>
+        <div class="trilho"><i style="width:${Math.min(100, Math.max(total ? 2 : 0, pct))}%"></i></div>
+        <div class="at-sub">${x.programado ? `${moeda(x.pago)} pago · ${moeda(x.programado)} programado · ` : ""}${aviso}</div>
+      </div>`;
+    }).join("")}
+    ${semSocio.length ? `<p class="atrasado">${semSocio.length} antecipação(ões) sem sócio indicado (${moeda(soma(semSocio))}): abra o lançamento e escolha o sócio.</p>` : ""}
+    <p class="at-sub">Limite de ${moeda(LIMITE_ANTECIPACAO)} por sócio no mês. Confirme com o contador a forma de cálculo e a retenção.</p>
+  </div>`;
 }
 
 function telaGeral(mes, doMes) {
@@ -353,7 +390,8 @@ function telaGeral(mes, doMes) {
   const todas = saldosDasContas();
   const contas = todas.filter((x) => x.c.tipo !== "pf");
   const pessoais = todas.filter((x) => x.c.tipo === "pf");
-  const mesPF = (c) => soma(fin.lancamentos.filter((l) => l.conta_id === c.id && l.natureza === "receita" && l.pago_em?.startsWith(mes)));
+  const mesPF = (c) => soma(fin.lancamentos.filter((l) => l.pago_em?.startsWith(mes) &&
+    ((l.conta_id === c.id && l.natureza === "receita") || (ehAntecipacao(l) && l.conta_destino_id === c.id))));
   const semConta = fin.lancamentos.filter((l) => l.pago_em && !l.conta_id && l.natureza !== "transferencia").length;
   const poup = contaPoupanca();
 
@@ -387,6 +425,7 @@ function telaGeral(mes, doMes) {
           <span class="valor ${x.saldo < 0 ? "desp" : ""}">${moeda(x.saldo)}</span></div>`).join("")}
         <p class="at-sub">Valores recebidos na pessoa física: não entram no caixa, no resultado nem na reserva de imposto do escritório.</p>
       </div>` : ""}
+      ${quadroAntecipacoes(mes, pessoais.map((x) => x.c))}
     </div>
   </div>`;
 }
@@ -782,6 +821,8 @@ function abrirLancamento(l, base = {}) {
         <label>Categoria<select id="fl-categoria">${opcoesCategorias(d.natureza, d.categoria_id)}</select></label>
         <label>Conta<select id="fl-conta">${opcoesContas(d.conta_id)}</select></label>
       </div>
+      <label id="fl-socio-l" ${ehAntecipacao(d) ? "" : "hidden"}>Sócio que recebe
+        <select id="fl-socio">${opcoes(fin.contas.filter((c) => c.tipo === "pf" && (c.ativa || c.id === d.conta_destino_id)).map((c) => [c.id, c.nome]), d.conta_destino_id, "— escolha —")}</select></label>
       <div class="linha2">
         <label>Cliente (opcional)<input id="fl-cliente" list="fin-clientes" maxlength="200" value="${esc(d.cliente_nome || "")}"></label>
         <label>Processo (opcional)<input id="fl-processo" maxlength="60" value="${esc(d.processo || "")}"></label>
@@ -812,12 +853,17 @@ function salvarLancamento(l, d) {
     pago_em: $("fl-pago").value || null,
     categoria_id: $("fl-categoria").value || null,
     conta_id: $("fl-conta").value || null,
+    conta_destino_id: natureza === "despesa" && nomeCategoria($("fl-categoria").value) === CAT_ANTECIPACAO ? ($("fl-socio").value || null) : null,
     cliente_nome: clienteNome || null,
     cliente_id: cliente?.id ?? (clienteNome && clienteNome === d.cliente_nome ? d.cliente_id : null),
     processo: $("fl-processo").value.trim() || null,
     reembolsavel: natureza === "despesa" && $("fl-reembolsavel").checked,
     observacoes: $("fl-obs").value.trim() || null,
   };
+  if (natureza === "despesa" && nomeCategoria(dados.categoria_id) === CAT_ANTECIPACAO && !dados.conta_destino_id) {
+    avisar("Escolha o sócio que recebe a antecipação.", 4000);
+    return;
+  }
   const lembrar = $("fl-agenda").checked;
   const repetir = novo ? $("fl-repetir").value : "";
   const vezes = repetir ? Math.max(2, Math.min(120, Number($("fl-vezes").value) || 2)) : 1;
@@ -1714,6 +1760,7 @@ function prepararFinanceiro() {
       const receita = t.value === "receita";
       $("dfin-titulo").textContent = `${$("dfin-titulo").textContent.startsWith("Editar") ? "Editar" : "Nova"} ${receita ? "receita" : "despesa"}`;
       $("fl-categoria").innerHTML = opcoesCategorias(t.value);
+      $("fl-socio-l").hidden = true;
       $("fl-pago-rotulo").textContent = receita ? "Recebido em" : "Pago em";
       $("fl-reembolsavel-l").hidden = receita;
     }
@@ -1736,6 +1783,7 @@ function prepararFinanceiro() {
       atualizarPreviaRecebimento();
     }
     if (t.id === "fl-repetir") $("fl-vezes").disabled = !t.value;
+    if (t.id === "fl-categoria" && $("fl-socio-l")) $("fl-socio-l").hidden = nomeCategoria(t.value) !== CAT_ANTECIPACAO;
     if (t.id === "fp-parcial") atualizarPreviaPagamento();
     if (t.id === "ft-categoria" && !$("ft-descricao").value.trim()) {
       const nome = categoria(t.value)?.nome || "";
