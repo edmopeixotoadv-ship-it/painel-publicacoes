@@ -483,3 +483,27 @@ button.escolha { font: inherit; font-size: 14px; }
 /* avisos dentro das janelas */
 .erro-dlg { background: var(--perigo-fundo); color: var(--perigo); border-radius: 8px; padding: 8px 12px; font-size: 14px; font-weight: 600; }
 .campo-faltando { outline: 2px solid var(--perigo) !important; outline-offset: 2px; border-radius: 8px; }
+/* financeiro: período em A receber / A pagar */
+.fin-periodo { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: flex-end; background: var(--painel); border: 1px solid var(--borda); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; }
+.fin-periodo label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--suave); }
+.fin-periodo input { padding: 6px 8px; border: 1px solid var(--borda); border-radius: 7px; background: var(--bg); color: var(--texto); }
+.fin-periodo .atalhos { margin: 0; }
+.fin-periodo .atalhos button { font-size: 13px; padding: 4px 11px; }
+.total-periodo { font-size: 15px; color: var(--texto); }
+/* etiquetas de conta nos lançamentos */
+.etq-conta { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px; white-space: nowrap; background: #e8f0fb; color: #1d4ed8; }
+.etq-conta.poupanca { background: #e6f5ec; color: #15803d; }
+.etq-conta.pf { background: #f1e9fb; color: #7c3aed; }
+.etq-conta.caixa { background: #eef1f5; color: #475569; }
+.etq-conta.cartao { background: #fff1e6; color: #c2410c; }
+.etq-conta.outro, .etq-conta.sem { background: var(--lida-fundo); color: var(--suave); }
+@media (prefers-color-scheme: dark) {
+  .etq-conta { background: #172554; color: #93c5fd; }
+  .etq-conta.poupanca { background: #14321f; color: #86efac; }
+  .etq-conta.pf { background: #2e1065; color: #c4b5fd; }
+  .etq-conta.caixa { background: #1e293b; color: #cbd5e1; }
+  .etq-conta.cartao { background: #3a2414; color: #fdba74; }
+}
+.seta-conta { color: var(--suave); margin: 0 3px; font-size: 12px; }
+.linha-conta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+table.fin td .etq-conta { margin: 1px 0; }
